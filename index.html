@@ -5,18 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Auditoria Cajeros</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f0f4f1; }
-    #root { min-height: 100vh; }
-    .loading { display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:16px;color:#1a6b3c; }
-    .spinner { width:40px;height:40px;border:4px solid #e6f4ec;border-top:4px solid #1a6b3c;border-radius:50%;animation:spin .8s linear infinite; }
-    @keyframes spin { to{transform:rotate(360deg)} }
-    #error-display { color:red;padding:20px;font-size:14px;white-space:pre-wrap;max-width:800px;margin:20px auto;background:#fde8e8;border-radius:10px;display:none; }
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:#f0f4f1}
+    #root{min-height:100vh}
+    .loading{display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:16px;color:#1a6b3c}
+    .spinner{width:40px;height:40px;border:4px solid #e6f4ec;border-top:4px solid #1a6b3c;border-radius:50%;animation:spin .8s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    #status{position:fixed;bottom:10px;left:10px;font-size:11px;color:#666;background:#fff;padding:8px 12px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.1);z-index:9999}
+    #err{color:red;padding:20px;font-size:13px;white-space:pre-wrap;max-width:800px;margin:20px auto;background:#fde8e8;border-radius:10px;display:none}
   </style>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
 </head>
 <body>
   <div id="root">
@@ -25,24 +22,25 @@
       <div>Cargando Auditoria Cajeros...</div>
     </div>
   </div>
-  <div id="error-display"></div>
+  <div id="status">Cargando librerias...</div>
+  <div id="err"></div>
+
   <script>
-    // Check libraries loaded
-    window.addEventListener('DOMContentLoaded', function() {
-      var status = [];
-      status.push('React: ' + (typeof React !== 'undefined' ? 'OK' : 'FALTA'));
-      status.push('ReactDOM: ' + (typeof ReactDOM !== 'undefined' ? 'OK' : 'FALTA'));
-      status.push('XLSX: ' + (typeof XLSX !== 'undefined' ? 'OK' : 'FALTA'));
-      status.push('Recharts: ' + (typeof Recharts !== 'undefined' ? 'OK' : 'FALTA'));
-      console.log('Libs: ' + status.join(' | '));
-    });
-    window.onerror = function(msg, src, line, col, err) {
-      var el = document.getElementById('error-display');
-      el.style.display = 'block';
-      el.textContent = 'ERROR: ' + msg + '\nArchivo: ' + src + '\nLinea: ' + line + ':' + col + '\n\n' + (err && err.stack ? err.stack : '');
-      return false;
-    };
+    var st=document.getElementById('status');
+    var er=document.getElementById('err');
+    window.onerror=function(m,s,l,c,e){er.style.display='block';er.textContent='ERROR: '+m+'\nArchivo: '+s+'\nLinea: '+l+'\n'+(e?e.stack:'');};
+    function checkLib(name){st.textContent+=' | '+name+(window[name]?' OK':' FALTA');}
   </script>
-  <script src="App.js"></script>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" onload="checkLib('React')" onerror="st.textContent+=' | React FALLO'"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" onload="checkLib('ReactDOM')" onerror="st.textContent+=' | ReactDOM FALLO'"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" onload="checkLib('XLSX')" onerror="st.textContent+=' | XLSX FALLO'"></script>
+  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js" onload="checkLib('Recharts')" onerror="st.textContent+=' | Recharts FALLO'"></script>
+
+  <script>
+    st.textContent='Libs cargadas. Iniciando app...';
+    if(!window.Recharts){er.style.display='block';er.textContent='Recharts no cargo. Intentando alternativa...';}
+  </script>
+  <script src="App.js" onerror="st.textContent='App.js NO CARGO';er.style.display='block';er.textContent='App.js no se pudo cargar'"></script>
 </body>
 </html>
