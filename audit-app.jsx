@@ -350,7 +350,9 @@ function Upload({onData}){const r1=useRef(),r2=useRef(),r3=useRef(),r4=useRef();
     setBdP(m);setSt(`BD Personal: ${total} empleados (${activos} activos, ${total-activos} retirados).`);}catch(e){setEr(e.message);}},[rf]);
   const lj=useCallback(async f=>{setEr(null);setSt("Cargando memoria...");try{const txt=await f.text();const json=JSON.parse(txt);const d=loadSnapshot(json);
     if(!d){setEr("Archivo no valido.");return;}
-    setSt(`✅ Memoria: ${d.sede} | ${d.cajeros.length} cajeros`);
+    const c1=d.cajeros[0];
+    toast(d.cajeros.length+"caj | tpv:"+((d.tpvStats||[]).length)+" | hA:"+((c1&&c1.hA)?c1.hA.length:0)+" | dias:"+((c1)?c1.dias.length:0)+" | dS:"+d.dS.length,6000);
+    setSt("Memoria: "+d.sede+" | "+d.cajeros.length+" cajeros");
     setTimeout(()=>onData(d),600);}catch(e){setEr("Error: "+e.message);}},[onData]);
   const go=useCallback(()=>{if(!mD)return;setSt("Procesando...");setEr(null);setTimeout(()=>{try{const d=processData(mD,sD,bdP);
     const matched=d.cajeros.filter(c=>c.hrsHor!==null).length;
@@ -614,7 +616,7 @@ function PComp({data}){const r2=useRef();const[d2,setD2]=useState(null);const[st
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8,marginBottom:10}}>
         <div><h3 style={{margin:"0 0 4px",fontSize:15,fontWeight:700}}>📈 Comparar Periodos / Sedes</h3>
           <p style={{fontSize:12,color:CL.txtL,margin:0}}>Sube un archivo <b>.json</b> (guardado con 💾) o un <b>.xlsx</b> de otro periodo u otra sede. La app detecta automaticamente si es la misma sede o una diferente.</p></div>
-        <Btn green onClick={()=>saveSnapshot(data)}>💾 Guardar Memoria</Btn></div>
+        <Btn green onClick={()=>saveSnapshot(raw)}>💾 Guardar Memoria</Btn></div>
       <p style={{fontSize:12,color:CL.txtL,marginBottom:8}}>📍 Actual: <b>{data.sede}</b> | {data.periodo.desde} a {data.periodo.hasta} | {data.cajeros.length} cajeros | Prom: {fN(data.avg)} f/h</p>
       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
         <button onClick={()=>r2.current?.click()} style={{padding:"10px 20px",borderRadius:10,border:`2px dashed ${d2?mode==="sede"?"#9b59b6":CL.pri:CL.pri}`,background:d2?mode==="sede"?"#f3e8ff":CL.priLt:"#fff",color:d2?mode==="sede"?"#9b59b6":CL.pri:CL.pri,fontSize:13,fontWeight:700,cursor:"pointer"}}>{d2?`✅ ${d2.sede} (${d2.cajeros.length} cajeros)`:"📁 Subir .json o .xlsx"}</button>
