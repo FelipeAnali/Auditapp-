@@ -2874,7 +2874,137 @@ function Indiv({
     name: "Prom Reg/Dia",
     fill: CL.pri,
     radius: [4, 4, 0, 0]
-  })))), /*#__PURE__*/React.createElement("div", {
+  })))), c.hA.length > 0 && (() => {
+    const sorted = c.hA.slice().sort((a, b) => a.hora - b.hora);
+    const minH = sorted[0].hora,
+      maxH = sorted[sorted.length - 1].hora;
+    const activeHrs = new Set(sorted.map(h => h.hora));
+    const gapHrs = [];
+    for (let h = minH + 1; h < maxH; h++) {
+      if (!activeHrs.has(h)) gapHrs.push(h);
+    }
+    const pctActivo = maxH > minH ? (activeHrs.size / (maxH - minH + 1) * 100).toFixed(0) : 100;
+    const totalRegMin = c.hrsEfec > 0 ? (c.tR / (c.hrsEfec * 60)).toFixed(1) : 0;
+    const difMarcEfec = c.totalHrsMar > 0 ? (c.totalHrsMar - c.hrsEfec).toFixed(1) : null;
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        ...crd,
+        borderLeft: "4px solid #e67e22",
+        background: "#fffcf0"
+      }
+    }, /*#__PURE__*/React.createElement("h3", {
+      style: {
+        margin: "0 0 8px",
+        fontSize: 13,
+        fontWeight: 700,
+        color: "#e67e22"
+      }
+    }, "🔍 Analisis de Actividad"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 14,
+        flexWrap: "wrap",
+        fontSize: 12,
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: "center",
+        minWidth: 80
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 20,
+        fontWeight: 900,
+        color: +pctActivo >= 80 ? "#2ecc71" : +pctActivo >= 60 ? "#f39c12" : "#e74c3c"
+      }
+    }, pctActivo, "%"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: CL.txtL,
+        fontSize: 10
+      }
+    }, "Hrs con actividad")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: "center",
+        minWidth: 80
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 20,
+        fontWeight: 900,
+        color: "#3498db"
+      }
+    }, activeHrs.size, "h"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: CL.txtL,
+        fontSize: 10
+      }
+    }, "Horas activas")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: "center",
+        minWidth: 80
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 20,
+        fontWeight: 900,
+        color: gapHrs.length > 0 ? "#e74c3c" : "#2ecc71"
+      }
+    }, gapHrs.length, "h"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: CL.txtL,
+        fontSize: 10
+      }
+    }, "Horas sin registro")), difMarcEfec && /*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: "center",
+        minWidth: 80
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 20,
+        fontWeight: 900,
+        color: +difMarcEfec > 2 ? "#e74c3c" : "#f39c12"
+      }
+    }, difMarcEfec, "h"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: CL.txtL,
+        fontSize: 10
+      }
+    }, "Dif Marc vs Efec"))), gapHrs.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "#e67e22",
+        padding: "6px 10px",
+        background: "#fff",
+        borderRadius: 6
+      }
+    }, "⚠️ Horas sin registros: ", gapHrs.map(h => /*#__PURE__*/React.createElement("span", {
+      key: h,
+      style: {
+        display: "inline-block",
+        padding: "1px 6px",
+        margin: "1px",
+        borderRadius: 4,
+        background: "#fde8e8",
+        fontWeight: 600
+      }
+    }, h, ":00")), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: CL.txtL,
+        marginLeft: 6
+      }
+    }, "(entre primera y ultima actividad del periodo)")), difMarcEfec && +difMarcEfec > 1 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "#e74c3c",
+        marginTop: 6,
+        padding: "6px 10px",
+        background: "#fff",
+        borderRadius: 6
+      }
+    }, "🔴 Marcacion indica ", /*#__PURE__*/React.createElement("b", null, fH(c.totalHrsMar)), " en tienda pero solo registra ", /*#__PURE__*/React.createElement("b", null, fH(c.hrsEfec)), " efectivas. Diferencia: ", /*#__PURE__*/React.createElement("b", null, difMarcEfec, "h"), " sin actividad de registro."));
+  })(), /*#__PURE__*/React.createElement("div", {
     style: crd
   }, /*#__PURE__*/React.createElement("h3", {
     style: {
@@ -5899,7 +6029,5 @@ function App() {
     data: data
   })))));
 }
-
-// Mount
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(React.createElement(App));

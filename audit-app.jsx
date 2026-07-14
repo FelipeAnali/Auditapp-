@@ -491,6 +491,26 @@ function Indiv({data,sel,setSel,showR}){const c=data.cajeros.find(x=>x.nombre===
         <div style={crd}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700}}>📈 F/H</h3><ResponsiveContainer width="100%" height={170}><ComposedChart data={c.dias}><CartesianGrid strokeDasharray="3 3" stroke="#eee"/><XAxis dataKey="fechaD" tick={{fontSize:9}}/><YAxis tick={{fontSize:9}}/><Tooltip/><Area type="monotone" dataKey="fH" fill={`${CL.pri}20`} stroke="none"/><Line type="monotone" dataKey="fH" stroke={CL.pri} strokeWidth={2.5} dot={{r:3,fill:CL.pri}} name="F/H"/></ComposedChart></ResponsiveContainer></div>
         <div style={crd}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700}}>📦 R/H</h3><ResponsiveContainer width="100%" height={170}><ComposedChart data={c.dias}><CartesianGrid strokeDasharray="3 3" stroke="#eee"/><XAxis dataKey="fechaD" tick={{fontSize:9}}/><YAxis tick={{fontSize:9}}/><Tooltip/><Area type="monotone" dataKey="rH" fill="#3498db20" stroke="none"/><Line type="monotone" dataKey="rH" stroke="#3498db" strokeWidth={2.5} dot={{r:3}} name="R/H"/></ComposedChart></ResponsiveContainer></div></div>
       <div style={crd}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700}}>⏰ Por Hora</h3><ResponsiveContainer width="100%" height={150}><BarChart data={c.hA.slice().sort((a,b)=>a.hora-b.hora)}><CartesianGrid strokeDasharray="3 3" stroke="#eee"/><XAxis dataKey="horaStr" tick={{fontSize:9}}/><YAxis tick={{fontSize:9}}/><Tooltip/><Bar dataKey="prom" name="Prom Reg/Dia" fill={CL.pri} radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div>
+      {/* Gap / Tiempo muerto analysis */}
+      {c.hA.length>0&&(()=>{const sorted=c.hA.slice().sort((a,b)=>a.hora-b.hora);const minH=sorted[0].hora,maxH=sorted[sorted.length-1].hora;
+        const activeHrs=new Set(sorted.map(h=>h.hora));const gapHrs=[];for(let h=minH+1;h<maxH;h++){if(!activeHrs.has(h))gapHrs.push(h);}
+        const pctActivo=maxH>minH?((activeHrs.size/(maxH-minH+1))*100).toFixed(0):100;
+        const totalRegMin=c.hrsEfec>0?(c.tR/(c.hrsEfec*60)).toFixed(1):0;
+        const difMarcEfec=c.totalHrsMar>0?(c.totalHrsMar-c.hrsEfec).toFixed(1):null;
+        return <div style={{...crd,borderLeft:"4px solid #e67e22",background:"#fffcf0"}}>
+          <h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700,color:"#e67e22"}}>🔍 Analisis de Actividad</h3>
+          <div style={{display:"flex",gap:14,flexWrap:"wrap",fontSize:12,marginBottom:8}}>
+            <div style={{textAlign:"center",minWidth:80}}><div style={{fontSize:20,fontWeight:900,color:+pctActivo>=80?"#2ecc71":+pctActivo>=60?"#f39c12":"#e74c3c"}}>{pctActivo}%</div><div style={{color:CL.txtL,fontSize:10}}>Hrs con actividad</div></div>
+            <div style={{textAlign:"center",minWidth:80}}><div style={{fontSize:20,fontWeight:900,color:"#3498db"}}>{activeHrs.size}h</div><div style={{color:CL.txtL,fontSize:10}}>Horas activas</div></div>
+            <div style={{textAlign:"center",minWidth:80}}><div style={{fontSize:20,fontWeight:900,color:gapHrs.length>0?"#e74c3c":"#2ecc71"}}>{gapHrs.length}h</div><div style={{color:CL.txtL,fontSize:10}}>Horas sin registro</div></div>
+            {difMarcEfec&&<div style={{textAlign:"center",minWidth:80}}><div style={{fontSize:20,fontWeight:900,color:+difMarcEfec>2?"#e74c3c":"#f39c12"}}>{difMarcEfec}h</div><div style={{color:CL.txtL,fontSize:10}}>Dif Marc vs Efec</div></div>}
+          </div>
+          {gapHrs.length>0&&<div style={{fontSize:11,color:"#e67e22",padding:"6px 10px",background:"#fff",borderRadius:6}}>
+            ⚠️ Horas sin registros: {gapHrs.map(h=><span key={h} style={{display:"inline-block",padding:"1px 6px",margin:"1px",borderRadius:4,background:"#fde8e8",fontWeight:600}}>{h}:00</span>)}
+            <span style={{color:CL.txtL,marginLeft:6}}>(entre primera y ultima actividad del periodo)</span></div>}
+          {difMarcEfec&&+difMarcEfec>1&&<div style={{fontSize:11,color:"#e74c3c",marginTop:6,padding:"6px 10px",background:"#fff",borderRadius:6}}>
+            🔴 Marcacion indica <b>{fH(c.totalHrsMar)}</b> en tienda pero solo registra <b>{fH(c.hrsEfec)}</b> efectivas. Diferencia: <b>{difMarcEfec}h</b> sin actividad de registro.</div>}
+        </div>;})()}
       <div style={crd}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700}}>📅 Detalle Diario</h3><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["Fecha","Dia","Reg","Fact","Ini","Fin","HrsEfec",...(data.hasSched?["HrsMar","Dif","R/HMar"]:[]),"F/HEfec","Min/Fact","Min/Reg"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead><tbody>
         {c.dias.map(d=>{const mf=d.facs>0?((d.hrs*60)/d.facs).toFixed(1):"—";const mr=d.regs>0?((d.hrs*60)/d.regs).toFixed(1):"—";const dif=d.hrsMar!=null?(d.hrsMar-d.hrs).toFixed(1):null;return <tr key={d.fecha} style={{background:d.hasFallido?"#fff3e0":"transparent"}}><td style={{...TD,fontWeight:600}}>{d.fechaD}</td><td style={{...TD,fontSize:11}}>{d.diaSem}</td><td style={TD}>{d.regs}</td><td style={TD}>{d.facs}</td><td style={{...TD,fontSize:11}}>{d.hi}</td><td style={{...TD,fontSize:11}}>{d.hf}</td><td style={TD}>{fH(d.hrs)}{d.minH?" ⚠️":""}</td>
           {data.hasSched&&<><td style={{...TD,fontSize:11,color:"#8e44ad",fontWeight:600}}>{d.hrsMar!=null?fH(d.hrsMar):"—"}{d.hasFallido&&<span style={{color:"#e67e22",fontSize:9}}> ⚠F</span>}</td>
