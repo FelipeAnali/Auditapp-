@@ -1,5496 +1,921 @@
-const { useState, useMemo, useRef, useEffect } = React;
-const {
-  ComposedChart, BarChart, Bar, Line, LineChart, XAxis, YAxis, CartesianGrid, Tooltip,
-  Legend, ResponsiveContainer, RadarChart, Radar,
-  PolarGrid, PolarAngleAxis, PolarRadiusAxis
-} = Recharts;
+const { useState, useCallback, useRef, useMemo, Component } = React;
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell, ComposedChart, Area, Line, LineChart, PieChart, Pie } = Recharts;
 
+/* ═══ CONSTANTS ═══ */
+const CL = { pri: "#1a6b3c", priDk: "#0d4a28", priLt: "#e6f4ec", dan: "#e74c3c", warn: "#f39c12", mut: "#95a5a6", bg: "#f0f4f1", card: "#fff", txt: "#1a1a2e", txtL: "#5a6672" };
+const RC_TOP=["#FFD700","#C0C0C0","#CD7F32"];
+function rColor(rank,total){if(rank<=3)return RC_TOP[rank-1];const pct=(rank-4)/(Math.max(total-4,1));if(pct<.25)return"#2ecc71";if(pct<.5)return"#3498db";if(pct<.75)return"#f39c12";return"#e74c3c";}
+const DIAS = ["Domingo","Lunes","Martes","Miercoles","Jueves","Viernes","Sabado"];
+const DC = ["Dom","Lun","Mar","Mie","Jue","Vie","Sab"];
+const EXCEL_EPOCH=25569; // Days between Excel epoch (1900-01-01) and Unix epoch (1970-01-01)
+const MS_PER_DAY=86400000;
+const MS_PER_HOUR=3600000;
+const MIN_HOURS_PER_DAY=1; // Minimum hours credited per working day
+const OUTLIER_THRESHOLD=0.4; // Day F/H below 40% of personal avg = outlier
+const KPI_CUMPLE_OFFSET=2; // Default: Cumple = avg + 2
+function rankCajeros(cajeros,avg,kpiCfg){cajeros.sort((a,b)=>b.pfH-a.pfH);cajeros.forEach((c,i)=>{c.rank=i+1;c.frase=getPhrase(c.rank,cajeros.length);c.kpi=getKPI(c.pfH,avg,kpiCfg);});return cajeros;}
 
-/* Fuente moderna */
-const _fontLink = document.createElement("link");
-_fontLink.rel = "stylesheet";
-_fontLink.href = "https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap";
-document.head.appendChild(_fontLink);
+function getPhrase(r,t){if(r===1)return{em:"🏆",tx:"Mejor cajero/a de la sede.",cl:"#FFD700"};if(r<=3)return{em:"👏",tx:"Excelente!",cl:"#2ecc71"};if(r<=6)return{em:"💪",tx:"Muy buen trabajo!",cl:"#27ae60"};if(r<=Math.ceil(t*.55))return{em:"👍",tx:"Cumple expectativas basicas.",cl:"#3498db"};if(r<=Math.ceil(t*.77))return{em:"⚠️",tx:"Por debajo. Requiere seguimiento.",cl:"#f39c12"};if(r<t)return{em:"🔻",tx:"Muy por debajo. Plan de mejora.",cl:"#e67e22"};return{em:"🔻",tx:"Ultimo. Intervencion inmediata.",cl:"#e74c3c"};}
+function getKPI(fh,avg,custom){if(custom){if(fh>=custom.cumple)return{lab:"Cumple",ic:"✅",cl:"#2ecc71"};if(fh>=custom.enProm)return{lab:"En promedio",ic:"😐",cl:"#f39c12"};return{lab:"No cumple",ic:"❌",cl:"#e74c3c"};}if(fh>=avg+2)return{lab:"Cumple",ic:"✅",cl:"#2ecc71"};if(fh>=avg)return{lab:"En promedio",ic:"😐",cl:"#f39c12"};return{lab:"No cumple",ic:"❌",cl:"#e74c3c"};}
+function recalcKPIs(data,kpiCfg){const c=kpiCfg&&kpiCfg.active?kpiCfg:null;return{...data,kpiCfg:c,cajeros:data.cajeros.map(x=>({...x,kpi:getKPI(x.pfH,data.avg,c)}))};}
+function kpiT(data){const c=data.kpiCfg;if(c)return{cumple:c.cumple,enProm:c.enProm,custom:true};return{cumple:data.avg+KPI_CUMPLE_OFFSET,enProm:data.avg,custom:false};}
 
-/* === THEME: SUPERTIENDAS CAÑAVERAL === */
-var C = {
-  /* surfaces */
-  bg:"#f3f7f4",sf:"#ffffff",sa:"#f8faf9",bd:"#e2ebe4",bd2:"#cdddd1",
-  /* brand */
-  p:"#1a7a2e",pd:"#145f22",pl:"#28a745",pg:"rgba(26,122,46,0.07)",ph:"rgba(26,122,46,0.12)",
-  /* accent & states */
-  s:"#0078d4",ac:"#d97706",dg:"#e11d48",
-  /* text */
-  t:"#0f1a12",tm:"#3a5440",td:"#7a9382",
-  /* legacy compat */
-  w:"#0f1a12",bg2:"#34d399",lg:"#15803d",
-  /* sidebar */
-  nav:"#071209",navSf:"#0c1e10",navBd:"rgba(52,211,153,0.06)",
-  navT:"#f0fdf4",navTm:"#86b394",navAct:"#34d399",
-  /* util */
-  zebra:"rgba(26,122,46,0.025)",gridHi:"rgba(26,122,46,0.10)",btnTxt:"#fff"
-};
+function parseDate(v){if(!v)return null;if(v instanceof Date)return isNaN(v.getTime())?null:v;if(typeof v==="number"){const d=new Date((v-EXCEL_EPOCH)*MS_PER_DAY);return isNaN(d.getTime())?null:d;}
+  let s=String(v).trim();
+  // Handle Spanish AM/PM: "a. m." → "AM", "p. m." → "PM"  
+  s=s.replace(/a\.\s*m\./gi,"AM").replace(/p\.\s*m\./gi,"PM");
+  // Try DD/MM/YYYY [H:MM[:SS] [AM/PM]]
+  const m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
+  if(m){let hr=parseInt(m[4]||"0",10);const mn=parseInt(m[5]||"0",10),sc=parseInt(m[6]||"0",10);
+    if(m[7]){const pm=m[7].toUpperCase()==="PM";if(pm&&hr<12)hr+=12;if(!pm&&hr===12)hr=0;}
+    return new Date(+m[3],+m[2]-1,+m[1],hr,mn,sc);}
+  // Try ISO-like: YYYY-MM-DD[T| ]HH:MM:SS
+  s=s.replace(/^(\d{4}-\d{2}-\d{2})\s+(\d)/,"$1T$2");
+  const d=new Date(s);return isNaN(d.getTime())?null:d;}
+const fD=d=>d?`${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`:"";
+const fDF=d=>d?`${fD(d)}/${d.getFullYear()}`:"";
+const fN=(n,dc=2)=>typeof n==="number"?n.toFixed(dc):"---";
+const fH=h=>`${Math.floor(h)}h ${Math.round((h-Math.floor(h))*60)}m`;
+const sN=f=>{if(!f)return"";const p=f.trim().split(/\s+/);if(p.length>=3)return`${p[2]} ${p[0]}`;return f;};
+const esc=s=>String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 
-var USERS={admin:{pw:"6051fc84a7a0d74c225fb18a496b09952da5642e60723ecae543298edd7d82d6",role:"admin",name:"Administrador"}};
+/* Consistency: coefficient of variation */
+function calcCV(arr){if(arr.length<2)return{cv:0,label:"N/A",cl:"#95a5a6"};const mean=arr.reduce((a,b)=>a+b,0)/arr.length;const sd=Math.sqrt(arr.reduce((s,v)=>s+Math.pow(v-mean,2),0)/arr.length);const cv=mean>0?(sd/mean)*100:0;if(cv<=15)return{cv,label:"Muy estable",cl:"#2ecc71"};if(cv<=30)return{cv,label:"Estable",cl:"#3498db"};if(cv<=50)return{cv,label:"Variable",cl:"#f39c12"};return{cv,label:"Muy variable",cl:"#e74c3c"};}
 
-async function hashPw(pw) {
-  try {
-    var buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pw));
-    return Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,"0"); }).join("");
-  } catch(e) {
-    // Fallback: simple hash for HTTP environments where crypto.subtle is unavailable
-    var hash = 0;
-    for (var i = 0; i < pw.length; i++) { hash = ((hash << 5) - hash) + pw.charCodeAt(i); hash |= 0; }
-    return "fallback_" + Math.abs(hash).toString(16);
+/* ═══ PROCESS SCHEDULE ═══ */
+const BREAK_THRESHOLD=20; // Minutes: breaks > this are deducted, <= are working time
+function processSchedule(jr){
+  const hd=jr[0].map(h=>String(h||"").trim().toUpperCase());
+  // Smart column finder: exact match first, then startsWith, then includes
+  const fc=ks=>{for(const k of ks){const i=hd.findIndex(h=>h===k);if(i>=0)return i;}for(const k of ks){const i=hd.findIndex(h=>h.startsWith(k));if(i>=0)return i;}for(const k of ks){const i=hd.findIndex(h=>h.includes(k));if(i>=0)return i;}return-1;};
+  const cFunc=fc(["FUNCION"]),cHora=fc(["HORA"]),cId=fc(["IDENTIFICACION","CEDULA","DOCUMENTO"]),cFecha=fc(["FECHA"]),cEmp=fc(["EMPLEADO","NOMBRE"]);
+  if(cFunc>=0&&cHora>=0&&cId>=0){
+    const byEmp={};
+    for(let i=1;i<jr.length;i++){const r=jr[i];if(!r)continue;
+      const ced=String(r[cId]||"").trim(),func=String(r[cFunc]||"").trim().toUpperCase(),nombre=cEmp>=0?String(r[cEmp]||"").trim():"";
+      if(!ced||!func)continue;
+      let hora=r[cHora];if(!hora)continue;
+      let mins=0;
+      if(typeof hora==="object"&&hora.getHours){mins=hora.getHours()*60+hora.getMinutes();}
+      else if(typeof hora==="number"){const frac=hora>1?hora-Math.floor(hora):hora;mins=Math.round(frac*24*60);}
+      else{const s=String(hora).trim();const p=s.split(":");if(p.length>=2)mins=(parseInt(p[0],10)||0)*60+(parseInt(p[1],10)||0);else mins=0;}
+      let fechaRaw=cFecha>=0?String(r[cFecha]||"").trim():"";if(!fechaRaw)continue;
+      // Normalize to YYYY-MM-DD: handles "2.02.2026", "2/02/2026", "2026-02-02", "2026.02.02"
+      let fecha;const fm=fechaRaw.match(/^(\d{1,2})[.\/\-](\d{1,2})[.\/\-](\d{4})/);
+      if(fm){fecha=`${fm[3]}-${fm[2].padStart(2,"0")}-${fm[1].padStart(2,"0")}`;}
+      else{const fm2=fechaRaw.match(/^(\d{4})[.\/\-](\d{1,2})[.\/\-](\d{1,2})/);fecha=fm2?`${fm2[1]}-${fm2[2].padStart(2,"0")}-${fm2[3].padStart(2,"0")}`:fechaRaw;}
+      const isFallido=func.includes("FALLID");
+      if(!byEmp[ced])byEmp[ced]={nombre,dias:{}};
+      if(!byEmp[ced].dias[fecha])byEmp[ced].dias[fecha]=[];
+      byEmp[ced].dias[fecha].push({func,mins,fallido:isFallido});
+      if(nombre&&!byEmp[ced].nombre)byEmp[ced].nombre=nombre;
+    }
+    const map={};
+    for(const[ced,emp]of Object.entries(byEmp)){
+      let totalHrs=0,totalDias=0,diasFallidos=0;const byDay={};
+      for(const[fecha,events]of Object.entries(emp.dias)){
+        events.sort((a,b)=>a.mins-b.mins);
+        const hasFallido=events.some(e=>e.fallido);
+        if(hasFallido)diasFallidos++;
+        const valid=events.filter(e=>!e.fallido);
+        if(valid.length<2){byDay[fecha]={hrsMar:0,hasFallido,bruto:0,breakMin:0};continue;}
+        const entrada=valid.find(e=>e.func==="ENTRADA");
+        const salida=[...valid].reverse().find(e=>e.func==="SALIDA");
+        if(!entrada||!salida||salida.mins<=entrada.mins){byDay[fecha]={hrsMar:0,hasFallido,bruto:0,breakMin:0};continue;}
+        const bruto=salida.mins-entrada.mins;
+        // New break rule: only deduct breaks > BREAK_THRESHOLD minutes
+        let breakMins=0;
+        for(let k=0;k<valid.length;k++){
+          if(valid[k].func.startsWith("SALIDA A")){
+            const llegada=valid.slice(k+1).find(e=>e.func.startsWith("LLEGADA"));
+            if(llegada&&llegada.mins>valid[k].mins){
+              const bk=llegada.mins-valid[k].mins;
+              if(bk>BREAK_THRESHOLD)breakMins+=bk; // Only deduct long breaks
+            }
+          }
+        }
+        const neto=Math.max(0,bruto-breakMins);
+        const hrsDay=neto/60;
+        byDay[fecha]={hrsMar:Math.round(hrsDay*100)/100,hasFallido,bruto:Math.round(bruto/60*100)/100,breakMin:breakMins};
+        if(!hasFallido&&neto>0){totalHrs+=hrsDay;totalDias++;}
+      }
+      map[ced]={hrs:Math.round(totalHrs*100)/100,dias:totalDias,diasFallidos,nombre:emp.nombre,byDay};
+    }
+    return{byCed:true,data:map};
   }
+  const cn=fc(["NOMBRE","CAJERO","COLABORADOR","EMPLEADO"]),ch=fc(["HORA","HORAS","HOURS","HRS"]),cd=fc(["DIA","DIAS","DAYS"]);
+  if(cn<0||ch<0)return null;
+  const map={};for(let i=1;i<jr.length;i++){const r=jr[i];if(!r||!r[cn])continue;const nm=String(r[cn]).trim().toUpperCase(),hrs=parseFloat(r[ch]),dias=cd>=0?parseInt(r[cd]):null;if(nm&&!isNaN(hrs)){if(!map[nm])map[nm]={hrs:0,dias:null,diasFallidos:0,byDay:{}};map[nm].hrs+=hrs;if(dias&&!isNaN(dias))map[nm].dias=(map[nm].dias||0)+dias;}}
+  return{byCed:false,data:map};
 }
 
-var HC=["0:00","4:00","5:00","6:00","7:00","8:00","9:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00","18:00","19:00","20:00","21:00","22:00","23:00"];
-var HL=["12am","4am","5am","6am","7am","8am","9am","10am","11am","12pm","1pm","2pm","3pm","4pm","5pm","6pm","7pm","8pm","9pm","10pm","11pm"];
-
-
-/* === TIME PARSING === 
-   SheetJS sin cellDates devuelve horas como fraccion del dia (0 a 1)
-   Ej: 5:46 AM = 0.2403, 13:29 = 0.5618
-   Con cellDates devuelve Date objects
-   Tambien puede venir como string "5:46:00"
-*/
-function parseHora(val) {
-  if (val == null) return 0;
-  // Es un numero fraccionario (SheetJS default) 
-  if (typeof val === "number") {
-    if (val >= 0 && val <= 1) return val * 24; // fraccion del dia -> horas
-    if (val > 1 && val <= 24) return val; // ya es horas
+/* ═══ PROCESS DATA ═══ */
+function processData(jr,schedMap,bdP){
+  const hd=jr[0].map(h=>String(h||"").trim().toUpperCase());
+  const fc=ks=>{for(const k of ks){const idx=hd.findIndex(h=>h.includes(k));if(idx>=0)return idx;}return-1;};
+  const cols={sede:fc(["DESC. C.O","DESC C.O","SEDE"]),nro:fc(["NRO DOCUMENTO","NRO DOC","FACTURA","DOCUMENTO"]),vend:fc(["VENDEDOR","CEDULA"]),caj:fc(["NOMBRE CAJERO","NOMBRE CAJ","NOM CAJERO","CAJERO"]),fec:fc(["FECHA CREACI","FECHA CREAC"]),tpv:fc(["T.P.V","TPV","CAJA","PUNTO DE VENTA"])};
+  if(cols.caj<0||cols.fec<0)throw new Error("Columnas 'Nombre cajero' y 'Fecha creacion' no encontradas.");
+  const map={};
+  function extractHour(raw,fec){
+    if(raw!=null){let s=String(raw);s=s.replace(/a\.\s*m\./gi,"AM").replace(/p\.\s*m\./gi,"PM");
+      const m=s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
+      if(m){let h=parseInt(m[1],10);if(m[4]){const pm=m[4].toUpperCase()==="PM";if(pm&&h<12)h+=12;if(!pm&&h===12)h=0;}if(h>=0&&h<24)return h;}}
+    if(typeof raw==="number"&&raw>0){const frac=raw-Math.floor(raw);if(frac>0)return Math.floor(frac*24);}
+    if(fec&&!isNaN(fec.getTime()))return fec.getHours();
     return 0;
   }
-  // Es un Date object (SheetJS con cellDates:true)
-  if (typeof val === "object" && val !== null) {
-    if (typeof val.getHours === "function") {
-      return val.getHours() + val.getMinutes() / 60;
-    }
-    return 0;
-  }
-  // Es un string "HH:MM" o "HH:MM:SS"
-  if (typeof val === "string") {
-    var m = val.match(/(\d+):(\d+)/);
-    if (m) return parseInt(m[1]) + parseInt(m[2]) / 60;
-  }
-  return 0;
-}
-
-/* === NORMALIZACIÓN DE NOMBRES DE SEDE ===
-   Unifica: "SC VILLANUEVA"="VILLANUEVA", "SCVILLAGORGONA"="VILLAGORGONA",
-            "S.C. ZARZAL"="ZARZAL", "S C PALMIRA"="PALMIRA", etc. */
-function normSede(raw) {
-  if (!raw) return "";
-  var s = String(raw).trim().toUpperCase().replace(/\s+/g, " ");
-  // Quitar cualquier variante del prefijo primero
-  s = s.replace(/^S\.C\.\s*/, "");    // S.C. VILLANUEVA  → VILLANUEVA
-  s = s.replace(/^S\.C\s*/, "");    // S.C VILLANUEVA   → VILLANUEVA
-  s = s.replace(/^S C\s+/, "");       // S C VILLANUEVA   → VILLANUEVA
-  s = s.replace(/^SC\s+/, "");        // SC VILLANUEVA    → VILLANUEVA
-  s = s.replace(/^SC(?=[A-Z\u00C0-\u00FF])/, ""); // SCVILLAGORGONA → VILLAGORGONA
-  s = s.trim();
-  if (!s || s === "SC") return "";
-  // Ahora siempre agregar "SC " al inicio
-  return "SC " + s;                   // → SC VILLANUEVA, SC ZARZAL, SC PASOANCHO
-}
-
-/* === PROCESS BASE DE DATOS MARCACIONES === */
-function procBase(rows) {
-  if (!rows || rows.length < 2) return [];
-  
-  // Mapear headers
-  const headers = rows[0] || [];
-  const colMap = {};
-  for (let i = 0; i < headers.length; i++) {
-    if (headers[i] != null) colMap[String(headers[i]).trim().toUpperCase()] = i;
-  }
-  
-  const iID = colMap["IDENTIFICACION"] != null ? colMap["IDENTIFICACION"] : colMap["CODEMPLEADO"];
-  const iNombre = colMap["EMPLEADO"];
-  const iFecha = colMap["FECHA"];
-  const iHora = colMap["HORA"];
-  const iFuncion = colMap["FUNCION"];
-  const iDep = colMap["DEPENDENCIA"];
-  const iCargo = colMap["CARGO"];
-  const iCCosto = colMap["CENTROCOSTO"];
-
-  if (iID == null || iFecha == null || iHora == null || iFuncion == null) {
-    var faltantes = [];
-    if (iID == null) faltantes.push("IDENTIFICACION");
-    if (iFecha == null) faltantes.push("FECHA");
-    if (iHora == null) faltantes.push("HORA");
-    if (iFuncion == null) faltantes.push("FUNCION");
-    alert("Error: faltan columnas en el archivo de marcaciones: " + faltantes.join(", ") + ". Columnas encontradas: " + headers.join(", "));
-    return [];
-  }
-
-  // Agrupar por empleado+fecha
-  const grouped = {};
-  for (let r = 1; r < rows.length; r++) {
-    const row = rows[r];
-    if (!row || row.length === 0) continue;
-    const id = String(row[iID] || "").trim();
-    /* Fecha: puede ser string "2026.01.02", Date object, o serial number de Excel */
-    let fechaRaw = row[iFecha];
-    let fecha;
-    if (typeof fechaRaw === "number" && fechaRaw > 40000) {
-      /* Excel serial number: convertir a YYYY.MM.DD usando UTC para evitar shift de timezone */
-      const d = new Date((fechaRaw - 25569) * 86400000);
-      fecha = d.getUTCFullYear() + "." + String(d.getUTCMonth()+1).padStart(2,"0") + "." + String(d.getUTCDate()).padStart(2,"0");
-    } else if (fechaRaw && typeof fechaRaw === "object" && typeof fechaRaw.getFullYear === "function") {
-      /* Date object de SheetJS con cellDates */
-      fecha = fechaRaw.getFullYear() + "." + String(fechaRaw.getMonth()+1).padStart(2,"0") + "." + String(fechaRaw.getDate()).padStart(2,"0");
-    } else {
-      fecha = String(fechaRaw || "").trim();
-    }
-    if (!id || !fecha) continue;
-    const key = id + "|" + fecha;
-    if (!grouped[key]) {
-      grouped[key] = {
-        id, nombre: String(row[iNombre] || "").trim(), fecha,
-        dep: normSede(row[iDep]), cargo: String(row[iCargo] || "").trim(),
-        ccosto: String(row[iCCosto] || "").trim(), marcaciones: [],
-      };
-    }
-    grouped[key].marcaciones.push({ hora: parseHora(row[iHora]), funcion: String(row[iFuncion] || "").trim().toUpperCase() });
-  }
-
-  const diasSem = ["Domingo","Lunes","Martes","Miercoles","Jueves","Viernes","Sabado"];
-  const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-  
-  /* -- UMBRALES DE CLASIFICACION DE BREAKS --
-     < 45 min        = BREAK CORTO (normal, politica dice max 15min + 3min tolerancia = 18min)
-     >= 45min < 170min = TURNO PARTIDO ILEGAL (no cumple minimo legal de 2h50m)
-     >= 170min        = TURNO PARTIDO LEGAL (cumple el minimo de 2 horas con 50 minutos)
-  */
-  const UMBRAL_TURNO_PARTIDO = 45;  // minutos: de aqui para arriba es turno partido
-  const UMBRAL_TP_LEGAL = 170;      // minutos: 2h50m = turno partido legal
-  
-  const results = [];
-  const fmtH = (h) => h !== null ? Math.floor(h) + ":" + String(Math.round((h % 1) * 60)).padStart(2, "0") : "-";
-
-  Object.values(grouped).forEach((emp) => {
-    emp.marcaciones.sort((a, b) => a.hora - b.hora);
-
-    let entrada = null, salida = null;
-    const breakPairs = [];
-    let breakOutH = null;
-
-    for (const marc of emp.marcaciones) {
-      const h = marc.hora;
-      const fn = marc.funcion;
-
-      if (fn === "FALLIDA") continue;
-      if (fn === "ENTRADA" && entrada === null) entrada = h;
-      if (fn === "SALIDA") salida = h;
-
-      // SALIDA A BREAK / SALIDA A BREAK 1 / SALIDA A BREAK 2
-      if (fn.startsWith("SALIDA A BREAK")) {
-        if (breakOutH !== null) {
-          breakPairs.push({ salidaH: breakOutH, llegadaH: null, duracionMin: 0, tipo: "BREAK_INCOMPLETO" });
+  const tpvMap={};
+  for(let i=1;i<jr.length;i++){const r=jr[i];if(!r||!r[cols.caj])continue;const nm=String(r[cols.caj]).trim();if(!nm||nm==="#N/D")continue;
+    const ced=cols.vend>=0?String(r[cols.vend]||"").trim():"",sede=cols.sede>=0?String(r[cols.sede]||"").trim():"",doc=cols.nro>=0?String(r[cols.nro]||"").trim():`d${i}`,raw=r[cols.fec],fec=parseDate(raw);if(!fec)continue;
+    const dk=`${fec.getFullYear()}-${String(fec.getMonth()+1).padStart(2,"0")}-${String(fec.getDate()).padStart(2,"0")}`;
+    const hora=extractHour(raw,fec);const tpv=cols.tpv>=0?String(r[cols.tpv]||"").trim():"";
+    if(!map[nm])map[nm]={nombre:nm,cedula:ced,sede,regs:[]};map[nm].regs.push({doc,fec,dk,hora,ds:fec.getDay(),tpv});
+    if(tpv){if(!tpvMap[tpv])tpvMap[tpv]={regs:0,facs:new Set(),cajeros:new Set(),dias:new Set(),horas:{}};tpvMap[tpv].regs++;tpvMap[tpv].facs.add(doc);tpvMap[tpv].cajeros.add(nm);tpvMap[tpv].dias.add(dk);if(!tpvMap[tpv].horas[hora])tpvMap[tpv].horas[hora]=0;tpvMap[tpv].horas[hora]++;}}
+  const cajeros=Object.values(map).map(c=>{
+    const byDay={};c.regs.forEach(r=>{if(!byDay[r.dk])byDay[r.dk]={facs:new Set(),regs:0,ts:[],byH:{}};byDay[r.dk].facs.add(r.doc);byDay[r.dk].regs++;byDay[r.dk].ts.push(r.fec.getTime());if(!byDay[r.dk].byH[r.hora])byDay[r.dk].byH[r.hora]={regs:0};byDay[r.dk].byH[r.hora].regs++;});
+    let tH=0;const pH={};for(let h=0;h<24;h++)pH[h]={regs:0,dias:0};const pS={};for(let d=0;d<7;d++)pS[d]={regs:0,facs:new Set(),dias:0,horas:0};
+    const dias=Object.entries(byDay).sort(([a],[b])=>a.localeCompare(b)).map(([dk,dy])=>{const mn=Math.min(...dy.ts),mx=Math.max(...dy.ts);let hrs=(mx-mn)/MS_PER_HOUR;const minH=hrs<MIN_HOURS_PER_DAY;if(minH)hrs=MIN_HOURS_PER_DAY;tH+=hrs;const facs=dy.facs.size,regs=dy.regs,dO=new Date(dk+"T12:00:00"),ds=dO.getDay();
+      Object.entries(dy.byH).forEach(([h,v])=>{pH[h].regs+=v.regs;pH[h].dias++;});pS[ds].regs+=regs;dy.facs.forEach(f=>pS[ds].facs.add(f));pS[ds].dias++;pS[ds].horas+=hrs;
+      return{fecha:dk,fechaD:fD(dO),fechaF:fDF(dO),diaSem:DC[ds],diaSemL:DIAS[ds],facs,regs,hrs,fH:facs/hrs,rH:regs/hrs,rF:facs>0?regs/facs:0,minH,hi:new Date(mn).toLocaleTimeString("es-CO",{hour:"2-digit",minute:"2-digit",second:"2-digit"}),hf:new Date(mx).toLocaleTimeString("es-CO",{hour:"2-digit",minute:"2-digit",second:"2-digit"})};});
+    const tF=dias.reduce((s,d)=>s+d.facs,0),tR=c.regs.length;
+    const mD=dias.length>0?dias.reduce((a,b)=>a.fH>b.fH?a:b):null,pDy=dias.length>0?dias.reduce((a,b)=>a.fH<b.fH?a:b):null;
+    const hA=Object.entries(pH).filter(([,v])=>v.regs>0).map(([h,v])=>({hora:+h,horaStr:`${h}:00`,regs:v.regs,dias:v.dias,prom:v.dias>0?v.regs/v.dias:0})).sort((a,b)=>b.regs-a.regs);
+    const dA=Object.entries(pS).filter(([,v])=>v.dias>0).map(([d,v])=>({dia:DC[d],regs:v.regs,facs:v.facs.size,dias:v.dias,horas:v.horas,fH:v.horas>0?v.facs.size/v.horas:0}));
+    const consist=calcCV(dias.map(d=>d.fH));
+    let hrsHor=null,diasProg=null,diasFallidos=null,schedByDay=null;
+    if(schedMap){
+      let found=null;
+      if(schedMap.byCed){
+        const ced=c.cedula.replace(/\D/g,"");
+        // Try cedula match first
+        if(ced){const match=Object.entries(schedMap.data).find(([k])=>k.replace(/\D/g,"")===ced);if(match)found=match[1];}
+        // Fallback: name match when no cedula or no cedula match
+        if(!found){const nu=c.nombre.toUpperCase();found=Object.values(schedMap.data).find(v=>v.nombre&&v.nombre.toUpperCase()===nu);
+          if(!found){const pts=nu.split(/\s+/);found=Object.values(schedMap.data).find(v=>{const vn=v.nombre?v.nombre.toUpperCase():"";return pts.filter(p=>p.length>3).every(p=>vn.includes(p));});}
         }
-        breakOutH = h;
+      }else{
+        const sd=schedMap.data;const nu=c.nombre.toUpperCase();
+        found=sd[nu];if(!found){const ks=Object.keys(sd),pts=nu.split(/\s+/),mt=ks.find(k=>pts.some(p=>p.length>3&&k.includes(p)));if(mt)found=sd[mt];}
       }
-      
-      // LLEGADA DE BREAK / LLEGADA DE BREAK 1 / LLEGADA DE BREAK 2
-      if (fn.startsWith("LLEGADA DE BREAK") && breakOutH !== null) {
-        const duracionMinRaw = Math.round((h - breakOutH) * 60);
-        if (duracionMinRaw <= 0) { breakOutH = null; continue; }
-        const duracionMin = duracionMinRaw;
-        
-        let tipo;
-        if (duracionMin < UMBRAL_TURNO_PARTIDO) {
-          tipo = "BREAK_CORTO";
-        } else if (duracionMin < UMBRAL_TP_LEGAL) {
-          tipo = "TP_ILEGAL";
-        } else {
-          tipo = "TP_LEGAL";
-        }
-
-        breakPairs.push({
-          salidaH: breakOutH, llegadaH: h,
-          duracionMin, tipo,
-        });
-        breakOutH = null;
-      }
+      if(found){hrsHor=found.hrs;diasProg=found.dias;diasFallidos=found.diasFallidos||0;schedByDay=found.byDay||null;}
     }
+    // Merge marcación data per day
+    let totalHrsMar=0,diasMarValid=0;
+    dias.forEach(d=>{
+      if(schedByDay){
+        // Try matching by fecha key (normalize both sides)
+        const mk=Object.keys(schedByDay).find(k=>k===d.fecha||k.includes(d.fecha)||d.fecha.includes(k));
+        if(mk){const md=schedByDay[mk];d.hrsMar=md.hrsMar;d.hasFallido=md.hasFallido;d.breakMin=md.breakMin;
+          if(!md.hasFallido&&md.hrsMar>0){totalHrsMar+=md.hrsMar;diasMarValid++;}
+        }else{d.hrsMar=null;d.hasFallido=false;d.breakMin=0;}
+      }else{d.hrsMar=null;d.hasFallido=false;d.breakMin=0;}
+      d.rHMar=d.hrsMar&&d.hrsMar>0?d.regs/d.hrsMar:null;
+      d.fHMar=d.hrsMar&&d.hrsMar>0?d.facs/d.hrsMar:null;
+    });
+    const diasNoLab=diasProg?Math.max(0,diasProg-dias.length):null;
+    const bdInfo=bdP?bdP[c.nombre.toUpperCase()]||null:null;
+    const activo=bdInfo?bdInfo.activo:null;const cargo=bdInfo?bdInfo.cargo:"";const ccosto=bdInfo?bdInfo.ccosto:"";
+    const rHMar=totalHrsMar>0?tR/totalHrsMar:0; // Registros per marcación hour (RANKING METRIC)
+    const fHMar=totalHrsMar>0?tF/totalHrsMar:0;
+    return{nombre:c.nombre,cedula:c.cedula,sede:c.sede,tF,tR,numDias:dias.length,hrsEfec:tH,hrsHor,totalHrsMar,diasMarValid,diasProg,diasNoLab,diasFallidos,activo,cargo,ccosto,pfH:tH>0?tF/tH:0,prH:tH>0?tR/tH:0,prF:tF>0?tR/tF:0,rHMar,fHMar,dias,mD,pDy,hA,dA,consist,rank:0,frase:null,kpi:null};});
+  // RANKING: if marcaciones loaded, rank by R/HMar; else by F/HEfec
+  const hasSched=cajeros.some(c=>c.hrsHor!==null);
+  if(hasSched){cajeros.sort((a,b)=>b.rHMar-a.rHMar);}else{cajeros.sort((a,b)=>b.pfH-a.pfH);}
+  const avg=cajeros.length>0?cajeros.reduce((s,c)=>s+c.pfH,0)/cajeros.length:0;
+  const avgR=cajeros.length>0?cajeros.reduce((s,c)=>s+c.prH,0)/cajeros.length:0;
+  const avgRHMar=hasSched&&cajeros.length>0?cajeros.reduce((s,c)=>s+c.rHMar,0)/cajeros.length:0;
+  rankCajeros(cajeros,avg,null);
+  const allDates=[...new Set(cajeros.flatMap(c=>c.dias.map(d=>d.fecha)))].sort();
+  const dS=allDates.map(dk=>{let f=0,r=0,h=0,a=0;cajeros.forEach(c=>{const d=c.dias.find(x=>x.fecha===dk);if(d){f+=d.facs;r+=d.regs;h+=d.hrs;a++;}});return{fecha:dk,fechaD:fD(new Date(dk+"T12:00:00")),facs:f,regs:r,hrs:h,activos:a,fH:h>0?f/h:0};});
+  const tpvStats=Object.entries(tpvMap).map(([tpv,v])=>{const peakH=Object.entries(v.horas).sort((a,b)=>b[1]-a[1])[0];return{tpv,regs:v.regs,facs:v.facs.size,cajeros:v.cajeros.size,dias:v.dias.size,promRegDia:Math.round(v.regs/v.dias.size),promFacDia:Math.round(v.facs.size/v.dias.size),peakHora:peakH?+peakH[0]:null};}).sort((a,b)=>b.regs-a.regs);
+  return{cajeros,sede:cajeros[0]?.sede||"Sede",avg,avgR,avgRHMar,hasSched,tR:cajeros.reduce((s,c)=>s+c.tR,0),tF:cajeros.reduce((s,c)=>s+c.tF,0),periodo:{desde:allDates[0],hasta:allDates[allDates.length-1]},dS,allDates,kpiCfg:null,tpvStats};}
 
-    // -- Clasificar breaks --
-    const breaksCortos = breakPairs.filter((b) => b.tipo === "BREAK_CORTO");
-    const todosTP = breakPairs.filter((b) => b.tipo === "TP_LEGAL" || b.tipo === "TP_ILEGAL");
-    const tpLegales = breakPairs.filter((b) => b.tipo === "TP_LEGAL");
-    const tpIlegales = breakPairs.filter((b) => b.tipo === "TP_ILEGAL");
+/* ═══ FILTER BY DATE RANGE ═══ */
+function filterByDates(data,from,to){
+  if(!from&&!to)return{...data,filtered:false};
+  const cajeros=data.cajeros.map(c=>{const dias=c.dias.filter(d=>{if(from&&d.fecha<from)return false;if(to&&d.fecha>to)return false;return true;});if(dias.length===0)return null;
+    const tF=dias.reduce((s,d)=>s+d.facs,0),tR=dias.reduce((s,d)=>s+d.regs,0),tH=dias.reduce((s,d)=>s+d.hrs,0);const consist=calcCV(dias.map(d=>d.fH));
+    return{...c,dias,tF,tR,numDias:dias.length,hrsEfec:tH,hrsHor:null,diasProg:null,diasNoLab:null,pfH:tH>0?tF/tH:0,prH:tH>0?tR/tH:0,prF:tF>0?tR/tF:0,mD:dias.reduce((a,b)=>a.fH>b.fH?a:b),pDy:dias.reduce((a,b)=>a.fH<b.fH?a:b),consist};}).filter(Boolean);
+  if(cajeros.length===0)return{...data,filtered:true,cajeros:[],avg:0,avgR:0,tR:0,tF:0,periodo:{desde:from||data.periodo.desde,hasta:to||data.periodo.hasta},dS:[],allDates:[]};
+  cajeros.sort((a,b)=>b.pfH-a.pfH);const avg=cajeros.reduce((s,c)=>s+c.pfH,0)/cajeros.length;const avgR=cajeros.reduce((s,c)=>s+c.prH,0)/cajeros.length;
+  rankCajeros(cajeros,avg,data.kpiCfg);
+  const allDates=[...new Set(cajeros.flatMap(c=>c.dias.map(d=>d.fecha)))].sort();
+  const dS=allDates.map(dk=>{let f=0,r=0,h=0,a=0;cajeros.forEach(c=>{const d=c.dias.find(x=>x.fecha===dk);if(d){f+=d.facs;r+=d.regs;h+=d.hrs;a++;}});return{fecha:dk,fechaD:fD(new Date(dk+"T12:00:00")),facs:f,regs:r,hrs:h,activos:a,fH:h>0?f/h:0};});
+  return{...data,filtered:true,hasSched:false,cajeros,avg,avgR,tR:cajeros.reduce((s,c)=>s+c.tR,0),tF:cajeros.reduce((s,c)=>s+c.tF,0),periodo:{desde:allDates[0],hasta:allDates[allDates.length-1]},dS,allDates};}
 
-    // === VALIDACION DE BUENA MARCACION (Pol 9 - BMA) ===
-    // Cuenta marcaciones validas (excluye FALLIDA)
-    const marcacionesValidas = emp.marcaciones.filter(m => m.funcion !== "FALLIDA");
-    const totalMarcas = marcacionesValidas.length;
-    // Si tiene breaks INCOMPLETOS (salida sin llegada) -> mala marcacion
-    const tieneBreakIncompleto = breakPairs.some(b => b.tipo === "BREAK_INCOMPLETO");
-    // Reglas:
-    //  - Numero PAR de marcaciones
-    //  - Minimo 4 marcaciones (1 break o mas)
-    //  - Sin breaks incompletos
-    //  - Con entrada y salida principales detectadas
-    const marcacionOk = (totalMarcas >= 4) && (totalMarcas % 2 === 0) && !tieneBreakIncompleto && entrada !== null && salida !== null;
-    // Razon de la mala marcacion (para el reporte)
-    let marcacionMotivo = "";
-    if (!marcacionOk) {
-      if (totalMarcas === 0) marcacionMotivo = "Sin marcaciones";
-      else if (totalMarcas < 4) marcacionMotivo = totalMarcas + " marcacion(es) - debe tener minimo 4 (con break)";
-      else if (totalMarcas % 2 !== 0) marcacionMotivo = totalMarcas + " marcaciones (impar) - falta una marcacion";
-      else if (tieneBreakIncompleto) marcacionMotivo = "Salida a break sin llegada";
-      else if (entrada === null) marcacionMotivo = "Sin entrada principal";
-      else if (salida === null) marcacionMotivo = "Sin salida principal";
-      else marcacionMotivo = "Marcacion inconsistente";
-    }
+/* ═══ EXCEL EXPORTS ═══ */
+function aS(wb,nm,hd,rw,cw){const ws=XLSX.utils.aoa_to_sheet([hd,...rw]);if(cw)ws["!cols"]=cw.map(w=>({wch:w}));XLSX.utils.book_append_sheet(wb,ws,nm.substring(0,31));}
 
-    const totalBreakCortoMin = breaksCortos.reduce((s, b) => s + b.duracionMin, 0);
-    const totalTPMin = todosTP.reduce((s, b) => s + b.duracionMin, 0);
-    const totalBreakH = breakPairs.reduce((s, b) => s + b.duracionMin, 0) / 60;
-    const breakCortoMaxMin = breaksCortos.length > 0 ? Math.max(...breaksCortos.map((b) => b.duracionMin)) : 0;
+function exAll(data){toast("⏳ Generando Excel...");setTimeout(()=>{const wb=XLSX.utils.book_new();const hh=data.hasSched;const kt=kpiT(data);
+  aS(wb,"Ranking",["#","CED","CAJERO","SEDE","FACT","REG","DIAS",...(hh?["H.HOR","H.EFEC"]:["H.EFEC"]),"F/H","R/H","R/F","CONSIST","KPI","ESTADO"],
+    data.cajeros.map(c=>[c.rank,c.cedula,c.nombre,c.sede,c.tF,c.tR,c.numDias,...(hh?[c.hrsHor!==null?c.hrsHor:"-",+c.hrsEfec.toFixed(2)]:[+c.hrsEfec.toFixed(2)]),+c.pfH.toFixed(2),+c.prH.toFixed(2),+c.prF.toFixed(2),`${c.consist.label} (${c.consist.cv.toFixed(0)}%)`,`${c.kpi.ic} ${c.kpi.lab}`,`${c.frase.em} ${c.frase.tx}`]),
+    [6,14,38,20,10,10,6,...(hh?[10,10]:[10]),10,10,10,18,16,36]);
+  aS(wb,"Promedios",["METRICA","VALOR","DETALLE"],
+    [["Cajeros",data.cajeros.length,""],["Facturas",data.tF,""],["Registros",data.tR,""],["Prom F/H",+data.avg.toFixed(4),""],["Prom R/H",+data.avgR.toFixed(4),""],["Cumple >=",+kt.cumple.toFixed(2),kt.custom?"Personalizado":"Prom+2"],["En Prom >=",+kt.enProm.toFixed(2),kt.custom?"Personalizado":"= Prom"],["Tipo KPIs",kt.custom?"PERSONALIZADOS":"AUTOMATICOS",""],["Desde",data.periodo.desde,""],["Hasta",data.periodo.hasta,""]],[26,16,30]);
+  aS(wb,"Detalle Diario",["CAJERO","CED","FECHA","DIA","FACT","REG","INI","FIN","HRS","F/H","R/H","R/F"],
+    data.cajeros.flatMap(c=>c.dias.map(d=>[c.nombre,c.cedula,d.fecha,d.diaSem,d.facs,d.regs,d.hi,d.hf,+d.hrs.toFixed(2),+d.fH.toFixed(2),+d.rH.toFixed(2),+d.rF.toFixed(2)])),[38,14,12,6,8,8,10,10,8,10,10,10]);
+  aS(wb,"Por Hora",["CAJERO","HORA","REG","DIAS","PROM"],data.cajeros.flatMap(c=>c.hA.map(h=>[c.nombre,h.horaStr,h.regs,h.dias,+h.prom.toFixed(2)])),[38,8,10,8,12]);
+  aS(wb,"Por Dia Semana",["CAJERO","DIA","REG","FACT","DIAS","HRS","F/H"],data.cajeros.flatMap(c=>c.dA.map(d=>[c.nombre,d.dia,d.regs,d.facs,d.dias,+d.horas.toFixed(2),+d.fH.toFixed(2)])),[38,8,10,10,8,10,10]);
+  aS(wb,"Consistencia",["#","CAJERO","F/H","CV%","CALIFICACION","MEJOR F/H","PEOR F/H","DIF"],
+    data.cajeros.map(c=>[c.rank,c.nombre,+c.pfH.toFixed(2),+c.consist.cv.toFixed(1),c.consist.label,c.mD?+c.mD.fH.toFixed(2):"",c.pDy?+c.pDy.fH.toFixed(2):"",c.mD&&c.pDy?+(c.mD.fH-c.pDy.fH).toFixed(2):""]),[6,38,10,8,16,10,10,10]);
+  if(data.cajeros.some(c=>c.diasNoLab!==null))aS(wb,"Asistencia",["CAJERO","DIAS PROG","DIAS TRAB","NO LABORADOS","MARC FALLIDAS","% ASIST"],
+    data.cajeros.filter(c=>c.diasProg).map(c=>[c.nombre,c.diasProg,c.numDias,c.diasNoLab,c.diasFallidos||0,((c.numDias/c.diasProg)*100).toFixed(1)+"%"]),[38,12,12,14,14,10]);
+  aS(wb,"Sede Diario",["FECHA","FACT","REG","ACTIVOS","F/H"],data.dS.map(d=>[d.fecha,d.facs,d.regs,d.activos,+d.fH.toFixed(2)]),[12,10,10,10,10]);
+  const fR=data.cajeros.map((c,i)=>{const r=i+2;return[c.nombre,c.tF,c.tR,+c.hrsEfec.toFixed(4),{f:`B${r}/D${r}`},{f:`C${r}/D${r}`}];});
+  aS(wb,"Formulas",["CAJERO","FACT","REG","HRS","F/H","R/H"],fR,[38,10,10,12,12,12]);
+  aS(wb,"Metodologia",["CONCEPTO","EXPLICACION"],[["REGISTROS","Cada fila = 1 producto"],["FACTURAS","Nro documento unicos"],["HRS EFECTIVAS","Ultimo-Primer registro/dia. Min 1h"],["HRS HORARIO","Del archivo de horarios (opcional)"],["CONSISTENCIA","CV% de Fact/Hora diaria. Menor = mas estable"],["F/H","Facturas/Horas. PRINCIPAL"],["CUMPLE",`>= ${fN(kt.cumple)}${kt.custom?" (personalizado)":" (Prom+2)"}`],["EN PROM",`>= ${fN(kt.enProm)} y < ${fN(kt.cumple)}`],["NO CUMPLE",`< ${fN(kt.enProm)}`]],[24,70]);
+  XLSX.writeFile(wb,`Auditoria_${data.sede.replace(/\s/g,"_")}.xlsx`);toast("✅ Excel listo");},50);}
 
-    // -- Tipo de jornada --
-    let tipo = "Jorn Con";
-    if (entrada === null && salida === null) tipo = "Sin Marcacion";
-    else if (tpLegales.length > 0) tipo = "Tur Par Legal";
-    else if (tpIlegales.length > 0) tipo = "Tur Par Ilegal";
-    
-    // -- Grilla horaria (excluyendo bloques de turno partido de la presencia) --
-    const hg = {};
-    for (const hc of HC) hg[hc] = 0;
-    
-    if (entrada !== null && salida !== null && salida > entrada) {
-      for (const hc of HC) {
-        const hNum = parseInt(hc.split(":")[0]);
-        if (hNum >= Math.floor(entrada) && hNum < Math.ceil(salida)) {
-          let enBreakTP = false;
-          for (const bp of breakPairs) {
-            if (bp.duracionMin >= UMBRAL_TURNO_PARTIDO && hNum >= Math.floor(bp.salidaH) && hNum < Math.ceil(bp.llegadaH)) {
-              enBreakTP = true;
-              break;
-            }
-          }
-          hg[hc] = enBreakTP ? 0 : 1;
-        }
-      }
-    }
-    
-    const totalH = (entrada !== null && salida !== null) ? Math.max(0, salida - entrada - totalBreakH) : 0;
-    
-    // -- Parsear fecha --
-    let dObj = null;
-    const fs = String(emp.fecha);
-    if (typeof emp.fecha === "number" && emp.fecha > 40000) {
-      // Excel serial number: days since 1899-12-30 — parse as local date
-      const excelDate = new Date((emp.fecha - 25569) * 86400000);
-      dObj = new Date(excelDate.getUTCFullYear(), excelDate.getUTCMonth(), excelDate.getUTCDate());
-    } else if (fs.includes(".")) {
-      const parts = fs.split(".");
-      dObj = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-    } else if (fs.includes("-")) {
-      // YYYY-MM-DD: parse as local time to avoid timezone shift (UTC-5 en Colombia)
-      const parts = fs.split("-");
-      if (parts.length === 3) {
-        dObj = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-      } else {
-        dObj = new Date(fs);
-      }
-    } else if (fs.includes("/")) {
-      const parts = fs.split("/");
-      dObj = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-    }
-    
-    let dsm = "", me = "", di = "", sem = "";
-    if (dObj && !isNaN(dObj.getTime())) {
-      dsm = diasSem[dObj.getDay()];
-      me = meses[dObj.getMonth()];
-      di = dObj.getDate();
-      const sw = new Date(dObj);
-      const dw = dObj.getDay() === 0 ? 7 : dObj.getDay();
-      sw.setDate(dObj.getDate() - dw + 1);
-      const ew = new Date(sw);
-      ew.setDate(sw.getDate() + 6);
-      sem = sw.getMonth() === ew.getMonth()
-        ? sw.getDate() + " AL " + ew.getDate() + " DE " + meses[sw.getMonth()].toUpperCase() + " " + sw.getFullYear()
-        : sw.getDate() + " DE " + meses[sw.getMonth()].toUpperCase() + " AL " + ew.getDate() + " DE " + meses[ew.getMonth()].toUpperCase() + " " + ew.getFullYear();
-    }
-    
-    // -- Quincena retail --
-    let esQuincena = "No";
-    if (di) {
-      const dNum = Number(di);
-      const mesIdx = dObj ? dObj.getMonth() : -1;
-      if ([1,2,3,15,16,17,30,31].includes(dNum)) esQuincena = "Si";
-      if (mesIdx === 1 && (dNum === 28 || dNum === 29)) esQuincena = "Si";
-    }
-    
-    // -- Detalle de breaks (para tabla y politicas) --
-    const breakDetalle = breakPairs.map((b) => {
-      const tipoLabel = b.tipo === "BREAK_CORTO" ? "Corto" : b.tipo === "TP_LEGAL" ? "TP Legal" : b.tipo === "BREAK_INCOMPLETO" ? "Incompleto" : "TP Ilegal";
-      return fmtH(b.salidaH) + "-" + fmtH(b.llegadaH) + " (" + b.duracionMin + "min " + tipoLabel + ")";
-    }).join(" | ");
-    
-    const record = {
-      IDENTIFICACION: emp.id, EMPLEADO: emp.nombre, DEPENDENCIA: emp.dep,
-      CARGO: emp.cargo, CENTROCOSTO: emp.ccosto, FECHA: emp.fecha,
-      TIPO_JORNADA: tipo,
-      TOTAL_HORAS: Math.round(totalH * 100) / 100,
-      TOTAL_BREAK: Math.round(totalBreakH * 100) / 100,
-      // -- Detalle de breaks --
-      BREAKS_CORTOS: breaksCortos.length,
-      BREAK_CORTO_TOTAL_MIN: totalBreakCortoMin,
-      BREAK_CORTO_MAX_MIN: breakCortoMaxMin,
-      TURNOS_PARTIDOS: todosTP.length,
-      TP_LEGALES: tpLegales.length,
-      TP_ILEGALES: tpIlegales.length,
-      TP_TOTAL_MIN: totalTPMin,
-      BREAK_DETALLE: breakDetalle,
-      BREAK_PAIRS: breakPairs,
-      // -- Validacion de marcacion (Pol 9 - BMA) --
-      TOTAL_MARCAS: totalMarcas,
-      MARCACION_OK: marcacionOk,
-      MARCACION_MOTIVO: marcacionMotivo,
-      // -- Compat --
-      TURNO_PARTIDO: todosTP.length,
-      MES: me, DIA: di, DIA_SEMANA: dsm, SEMANA: sem,
-      ENTRADA_H: fmtH(entrada), SALIDA_H: fmtH(salida),
-      QUINCENA: esQuincena,
-    };
-    for (const hc of HC) record[hc] = hg[hc];
-    results.push(record);
-  });
-  
-  return results;
-}
+function exInd(c,data){toast("⏳ Generando Excel...");setTimeout(()=>{const wb=XLSX.utils.book_new();const kt=kpiT(data);
+  const rows=[["Nombre",c.nombre,""],["Cedula",c.cedula,""],["Sede",c.sede,""],["Ranking",`#${c.rank} de ${data.cajeros.length}`,""],["Facturas",c.tF,""],["Registros",c.tR,""],["Dias",c.numDias,""]];
+  if(c.hrsHor!==null)rows.push(["Hrs Horario",c.hrsHor,""]);rows.push(["Hrs Efectivas",+c.hrsEfec.toFixed(2),""]);
+  if(c.hrsHor!==null&&c.hrsHor>0)rows.push(["Aprovechamiento",((c.hrsEfec/c.hrsHor)*100).toFixed(1)+"%",""]);
+  if(c.diasProg)rows.push(["Dias Programados",c.diasProg,""],["Dias No Laborados",c.diasNoLab,""]);
+  if(c.diasFallidos>0)rows.push(["Marc. Fallidas",c.diasFallidos+" dias","Dias con marcacion fallida"]);
+  rows.push(["F/H",+c.pfH.toFixed(4),""],["Consistencia",`${c.consist.label} (CV ${c.consist.cv.toFixed(0)}%)`,""],["KPI",`${c.kpi.ic} ${c.kpi.lab}`,`Umbral: ${fN(kt.cumple)}`]);
+  aS(wb,"Resumen",["DATO","VALOR","DETALLE"],rows,[20,22,30]);
+  aS(wb,"Diario",["FECHA","DIA","FACT","REG","INI","FIN","HRS","F/H","R/H"],c.dias.map(d=>[d.fecha,d.diaSem,d.facs,d.regs,d.hi,d.hf,+d.hrs.toFixed(2),+d.fH.toFixed(2),+d.rH.toFixed(2)]),[12,6,8,8,10,10,8,10,10]);
+  aS(wb,"Por Hora",["HORA","REG","DIAS","PROM"],c.hA.map(h=>[h.horaStr,h.regs,h.dias,+h.prom.toFixed(2)]),[8,10,8,12]);
+  XLSX.writeFile(wb,`Informe_${c.nombre.split(" ").slice(0,2).join("_")}.xlsx`);toast("✅ Excel listo");},50);}
 
-/* === ENRIQUECER FACTURAS con dsem, quincena, semana (necesita año del usuario) === */
-function enriquecerFacturas(facturas, anioInicio, cruzandoAnios) {
-  if (!facturas || !facturas.length) return [];
-  var meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-  var diasSem = ["Domingo","Lunes","Martes","Miercoles","Jueves","Viernes","Sabado"];
-  var mesAIdx = {};
-  meses.forEach(function(m,i){ mesAIdx[m] = i; });
-  // En modo "cruzando anios" los meses ENE/FEB/MAR usan año+1
-  var mesesAnioSig = {0:1,1:1,2:1};
+function exCmp(a,b){const wb=XLSX.utils.book_new();aS(wb,"Comparacion",["METRICA",a.nombre,b.nombre,"MEJOR"],[["Ranking",a.rank,b.rank,a.rank<b.rank?a.nombre:b.nombre],["F/H",+a.pfH.toFixed(2),+b.pfH.toFixed(2),a.pfH>b.pfH?a.nombre:b.nombre],["Consistencia",a.consist.label,b.consist.label,a.consist.cv<b.consist.cv?a.nombre:b.nombre],["KPI",`${a.kpi.ic} ${a.kpi.lab}`,`${b.kpi.ic} ${b.kpi.lab}`,""]],[14,24,24,28]);XLSX.writeFile(wb,`Comp_${sN(a.nombre)}_vs_${sN(b.nombre)}.xlsx`);toast("✅ Excel listo");}
 
-  return facturas.map(function(f) {
-    var c = Object.assign({}, f);
-    var mesIdx = mesAIdx[String(f.mes||"").toLowerCase().trim()];
-    if (mesIdx === undefined || !f.dia) return c;
-    var anio = anioInicio;
-    if (cruzandoAnios && mesesAnioSig[mesIdx]) anio = anioInicio + 1;
-    var dObj = new Date(anio, mesIdx, Number(f.dia));
-    if (isNaN(dObj.getTime())) return c;
-    c.anio = anio;
-    c.fecha = dObj.toISOString().slice(0,10);
-    c.dsem = diasSem[dObj.getDay()];
-    c.quincena = Number(f.dia) <= 15 ? "Si" : "No";
-    var sw = new Date(dObj);
-    var dw = dObj.getDay() === 0 ? 7 : dObj.getDay();
-    sw.setDate(dObj.getDate() - dw + 1);
-    var ew = new Date(sw);
-    ew.setDate(sw.getDate() + 6);
-    c.semana = sw.getMonth() === ew.getMonth()
-      ? sw.getDate() + " AL " + ew.getDate() + " DE " + meses[sw.getMonth()].toUpperCase() + " " + sw.getFullYear()
-      : sw.getDate() + " DE " + meses[sw.getMonth()].toUpperCase() + " AL " + ew.getDate() + " DE " + meses[ew.getMonth()].toUpperCase() + " " + ew.getFullYear();
-    return c;
-  });
-}
+function exAlt(data){toast("⏳ Generando Excel...");setTimeout(()=>{const wb=XLSX.utils.book_new();const kt=kpiT(data);
+  aS(wb,"No Cumplen",["#","CAJERO","F/H","UMBRAL","DIF"],data.cajeros.filter(c=>c.kpi.lab==="No cumple").map(c=>[c.rank,c.nombre,+c.pfH.toFixed(2),+kt.enProm.toFixed(2),+(c.pfH-kt.enProm).toFixed(2)]),[6,38,10,10,10]);
+  aS(wb,"En Promedio",["#","CAJERO","F/H","FALTA"],data.cajeros.filter(c=>c.kpi.lab==="En promedio").map(c=>[c.rank,c.nombre,+c.pfH.toFixed(2),+(kt.cumple-c.pfH).toFixed(2)]),[6,38,10,10]);
+  aS(wb,"Config",["DATO","VALOR"],[["Tipo",kt.custom?"PERSONALIZADOS":"AUTOMATICOS"],["Cumple >=",+kt.cumple.toFixed(2)],["En Prom >=",+kt.enProm.toFixed(2)]],[20,16]);
+  XLSX.writeFile(wb,`Alertas_${data.sede.replace(/\s/g,"_")}.xlsx`);toast("✅ Excel listo");},50);}
 
-/* === PROCESS FACTURAS === */
-function procFact(rows) {
-  if (!rows || rows.length < 2) return [];
-  /* Mapear columnas por nombre de header en vez de posición fija */
-  var headers = (rows[0]||[]).map(function(h){ return String(h||"").trim().toUpperCase(); });
-  var iSeccion = headers.findIndex(function(h){ return h.indexOf("DESC_CRI")>=0 || h.indexOf("SECCION")>=0; });
-  var iClase   = headers.findIndex(function(h){ return h === "CLASE"; });
-  var iSede    = headers.findIndex(function(h){ return h.indexOf("F285")>=0 || h.indexOf("SEDE")>=0 || h.indexOf("DESCRIPCION")>=0; });
-  var iHora    = headers.findIndex(function(h){ return h === "HORAS" || h === "HORA"; });
-  var iMes     = headers.findIndex(function(h){ return h.indexOf("MES")>=0; });
-  var iDia     = headers.findIndex(function(h){ return h.indexOf("DÍA")>=0 || h.indexOf("DIA")>=0; });
-  var iSemana  = headers.findIndex(function(h){ return h === "SEMANA"; });
-  var iNFact   = headers.findIndex(function(h){ return h.indexOf("# FACT")>=0 || (h.indexOf("FACT")>=0 && h.indexOf("FECHA")<0); });
-  var iCantReg = headers.findIndex(function(h){ return h.indexOf("CANT REG")>=0 || h.indexOf("CANT_REG")>=0; });
-  var iVenta   = headers.findIndex(function(h){ return h === "VENTA" || h.indexOf("VENTA")>=0; });
-  
-  /* Fallback a posiciones fijas si no se encuentran headers */
-  if (iSeccion < 0) iSeccion = 0;
-  if (iClase < 0) iClase = 1;
-  if (iSede < 0) iSede = 2;
-  if (iHora < 0) iHora = 3;
-  if (iMes < 0) iMes = 4;
-  if (iDia < 0) iDia = 5;
-  if (iNFact < 0) iNFact = 6;
-  if (iVenta < 0) iVenta = headers.length - 1;
+/* ═══ NARRATIVE PDF ═══ */
+const PCSS=`*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;padding:30px 40px;color:#1a1a2e;font-size:13px;line-height:1.7;max-width:800px;margin:0 auto}h1{font-size:20px;font-weight:800;color:#0d4a28;margin-bottom:4px}h2{font-size:15px;font-weight:700;color:#1a6b3c;margin:22px 0 8px;padding-bottom:4px;border-bottom:2px solid #1a6b3c}h3{font-size:13px;font-weight:700;color:#333;margin:14px 0 6px}p{margin:6px 0;text-align:justify}.sub{font-size:12px;color:#5a6672;margin-bottom:16px}.badge{display:inline-block;padding:3px 12px;border-radius:16px;font-size:12px;font-weight:600}.badge-g{background:#e6f9ee;color:#1a6b3c}.badge-y{background:#fff9e6;color:#e67e22}.badge-r{background:#fde8e8;color:#e74c3c}table{width:100%;border-collapse:collapse;margin:10px 0;font-size:12px}th{background:#1a6b3c;color:#fff;padding:7px 10px;text-align:left;font-size:11px;-webkit-print-color-adjust:exact;print-color-adjust:exact}td{padding:6px 10px;border-bottom:1px solid #e0e0e0}tr:nth-child(even){background:#f8faf8}.mb{display:inline-block;background:#f0f4f1;border-radius:8px;padding:8px 14px;margin:4px;text-align:center;min-width:100px}.mb .v{font-size:18px;font-weight:800;color:#1a6b3c}.mb .l{font-size:10px;color:#666}.hl{background:#e6f4ec;padding:12px 16px;border-radius:10px;border-left:4px solid #1a6b3c;margin:10px 0}.wb{background:#fde8e8;padding:12px 16px;border-radius:10px;border-left:4px solid #e74c3c;margin:10px 0}.ft{margin-top:28px;padding-top:10px;border-top:1px solid #ccc;font-size:10px;color:#888;text-align:center}@media print{body{padding:15px 20px}@page{margin:1.5cm}.pb{page-break-before:always}}`;
 
-  var results = [];
-  /* Helper para detectar subtotales: cualquier columna clave con "Total" descarta la fila */
-  function esSubtotal(w) {
-    var checks = [iHora, iMes, iDia, iNFact];
-    if (iSemana >= 0) checks.push(iSemana);
-    for (var k = 0; k < checks.length; k++) {
-      var idx = checks[k];
-      var v = w[idx];
-      if (v == null || String(v).trim().toLowerCase() === "total") return true;
-    }
-    return false;
+function narInd(c,data){const kt=kpiT(data);const diff=Math.abs(c.pfH-data.avg).toFixed(2);const nm=esc(c.nombre),sd=esc(c.sede),cd=esc(c.cedula);
+  const hrsL=c.hrsHor!==null&&c.hrsHor>0?`${fH(c.hrsEfec)} efectivas de ${c.hrsHor}h programadas (${((c.hrsEfec/c.hrsHor)*100).toFixed(1)}% aprovechamiento)`:`${fH(c.hrsEfec)} efectivas`;
+  let ev,eb;if(c.kpi.lab==="Cumple"){ev=`${nm} ha superado las expectativas. Su productividad de ${fN(c.pfH)} f/h esta ${diff} puntos por encima del promedio (${fN(data.avg)}), posicion ${c.rank} de ${data.cajeros.length}. Demuestra eficiencia y compromiso.`;eb="badge-g";}else if(c.kpi.lab==="En promedio"){ev=`${nm} cumple con expectativas basicas. Su productividad de ${fN(c.pfH)} f/h es congruente con el promedio (${fN(data.avg)}), posicion ${c.rank} de ${data.cajeros.length}. Se recomiendan oportunidades de mejora.`;eb="badge-y";}else{ev=`${nm} presenta rendimiento por debajo. Su productividad de ${fN(c.pfH)} f/h esta ${diff} puntos bajo el promedio (${fN(data.avg)}), posicion ${c.rank} de ${data.cajeros.length}. Requiere plan de accion inmediato.`;eb="badge-r";}
+  const rows=c.dias.map((d,i)=>`<tr${i%2===0?" style='background:#f8faf8'":""}><td>${d.fechaF}</td><td>${d.diaSemL}</td><td>${d.facs}</td><td>${d.regs}</td><td>${d.hi}</td><td>${d.hf}</td><td>${fH(d.hrs)}${d.minH?" ⚠️":""}</td><td style="font-weight:700;color:${d.fH>=data.avg?"#1a6b3c":"#e74c3c"}">${fN(d.fH)}</td><td>${fN(d.rH)}</td></tr>`).join("");
+  const mbs=[["Facturas",c.tF.toLocaleString()],["Registros",c.tR.toLocaleString()],["Dias",c.numDias],["Hrs Efec",fH(c.hrsEfec)],...(c.hrsHor!==null?[["Hrs Horario",c.hrsHor+"h"]]:[]),...(c.diasNoLab!==null?[["No Laborados",c.diasNoLab+" dias"]]:[]),...(c.diasFallidos>0?[["Marc. Fallidas",c.diasFallidos+" dias"]]:[]),["F/H",fN(c.pfH)],["R/H",fN(c.prH)],["Consistencia",`${c.consist.label}`]].map(([l,v])=>`<div class="mb"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+  return`<h1>Informe de Productividad - ${nm}</h1><p class="sub">Periodo: ${data.periodo.desde} a ${data.periodo.hasta} | ${sd} | Cedula: ${cd}</p>
+<h2>Resumen Ejecutivo</h2><p>${ev}</p>
+<h2>Metricas</h2><div style="text-align:center">${mbs}</div>
+<h2>Analisis de Resultados</h2><p>Proceso <b>${c.tF.toLocaleString()} facturas</b> y <b>${c.tR.toLocaleString()} productos</b> en <b>${hrsL}</b> a lo largo de <b>${c.numDias} dias</b>. Productividad: <b>${fN(c.pfH)} f/h</b>, posicion <b>${c.rank} de ${data.cajeros.length}</b>.</p>
+<p>Su nivel de consistencia es <b>${c.consist.label}</b> (CV: ${c.consist.cv.toFixed(1)}%), lo que indica ${c.consist.cv<=30?"un rendimiento predecible y confiable dia a dia":"variabilidad significativa entre dias, lo que sugiere inconsistencia operativa"}.</p>
+${c.mD?`<div class="hl"><b>Mejor dia:</b> ${c.mD.fechaF} (${c.mD.diaSemL}) con ${fN(c.mD.fH)} f/h y ${c.mD.facs} facturas.</div>`:""}
+${c.pDy?`<div class="${c.pDy.fH<data.avg?"wb":"hl"}"><b>Dia mas bajo:</b> ${c.pDy.fechaF} (${c.pDy.diaSemL}) con ${fN(c.pDy.fH)} f/h.</div>`:""}
+${c.diasNoLab!==null?`<p>De ${c.diasProg} dias programados, trabajo <b>${c.numDias} dias</b> con <b>${c.diasNoLab} dia(s) no laborados</b> (${((c.numDias/c.diasProg)*100).toFixed(1)}% asistencia).${c.diasFallidos>0?` <span style="color:#e67e22"><b>${c.diasFallidos} dia(s) con marcacion fallida</b> (la hora se uso pero la marcacion no fue valida).</span>`:""}</p>`:""}
+<h2>Detalle Diario</h2><table><thead><tr><th>Fecha</th><th>Dia</th><th>Fact</th><th>Reg</th><th>Ini</th><th>Fin</th><th>Hrs</th><th>F/H</th><th>R/H</th></tr></thead><tbody>${rows}</tbody></table>
+<h2>Conclusion</h2><p><span class="badge ${eb}">${c.kpi.ic} ${c.kpi.lab}</span></p>
+<p>${c.kpi.lab==="Cumple"?`Desempeno sobresaliente. Supera el promedio en ${diff} f/h.`:c.kpi.lab==="En promedio"?`Desempeno aceptable. Se recomienda optimizacion para el proximo ciclo.`:`Requiere atencion prioritaria. Plan de accion con seguimiento semanal.`}</p>
+${kt.custom?`<div class="hl"><b>KPIs utilizados:</b> Cumple >= ${fN(kt.cumple)} | En prom >= ${fN(kt.enProm)} (personalizados)</div>`:""}
+<div class="ft">Sistema de Auditoria | ${new Date().toLocaleDateString("es-CO")} | Prom sede: ${fN(data.avg)} f/h</div>`;}
+
+function narGen(data){const cu=data.cajeros.filter(c=>c.kpi.lab==="Cumple"),ep=data.cajeros.filter(c=>c.kpi.lab==="En promedio"),nc=data.cajeros.filter(c=>c.kpi.lab==="No cumple");const kt=kpiT(data);const sd=esc(data.sede);
+  const t3=data.cajeros.slice(0,3),pCu=((cu.length/data.cajeros.length)*100).toFixed(0),pNc=((nc.length/data.cajeros.length)*100).toFixed(0);
+  const bD=data.dS.reduce((a,b)=>a.fH>b.fH?a:b),wD=data.dS.reduce((a,b)=>a.fH<b.fH?a:b);
+  const mostConsist=data.cajeros.slice().sort((a,b)=>a.consist.cv-b.consist.cv).slice(0,3);
+  const leastConsist=data.cajeros.slice().sort((a,b)=>b.consist.cv-a.consist.cv).slice(0,3);
+  const rows=data.cajeros.map((c,i)=>{const bg=c.kpi.lab==="Cumple"?"#e6f9ee":c.kpi.lab==="No cumple"?"#fde8e8":"#fff9e6";return`<tr style="background:${bg}"><td style="font-weight:800;color:${rColor(i+1,data.cajeros.length)}">${c.rank}</td><td>${esc(c.nombre)}</td><td>${c.tF.toLocaleString()}</td><td>${fH(c.hrsEfec)}</td><td style="font-weight:700;color:${c.pfH>=data.avg?"#1a6b3c":"#e74c3c"}">${fN(c.pfH)}</td><td>${c.consist.label}</td><td>${c.kpi.ic} ${c.kpi.lab}</td></tr>`;}).join("");
+  return`<h1>Informe General de Productividad</h1><p class="sub">${sd} | ${data.periodo.desde} a ${data.periodo.hasta}</p>
+<h2>Resumen Ejecutivo</h2><p>La sede <b>${sd}</b> cuenta con <b>${data.cajeros.length} cajeros</b>. Se procesaron <b>${data.tF.toLocaleString()} facturas</b> y <b>${data.tR.toLocaleString()} registros</b>.</p>
+<p>${kt.custom?`<b>KPIs personalizados:</b> Cumple >= ${fN(kt.cumple)} f/h, En promedio >= ${fN(kt.enProm)} f/h.`:`Umbrales automaticos: Cumple >= ${fN(kt.cumple)} f/h, En promedio >= ${fN(kt.enProm)} f/h.`} Promedio sede: <b>${fN(data.avg)} f/h</b>. De ${data.cajeros.length} colaboradores: <b>${cu.length} (${pCu}%) cumplen</b>, <b>${ep.length} en promedio</b>, <b>${nc.length} (${pNc}%) no cumplen</b>.</p>
+${nc.length>0?`<div class="wb"><b>Atencion:</b> ${nc.length} colaboradores criticos: ${nc.map(c=>`${esc(c.nombre)} (${fN(c.pfH)} f/h)`).join(", ")}.</div>`:`<div class="hl"><b>Excelente:</b> Todos los colaboradores dentro o por encima del promedio.</div>`}
+<h2>Top 3</h2><p>${t3.map((c,i)=>`<b>${i+1}. ${esc(c.nombre)}</b> con ${fN(c.pfH)} f/h (${c.consist.label})`).join(". ")}.</p>
+<h2>Consistencia del Equipo</h2><p>Los mas estables: ${mostConsist.map(c=>`<b>${esc(sN(c.nombre))}</b> (CV ${c.consist.cv.toFixed(0)}%)`).join(", ")}. Los mas variables: ${leastConsist.map(c=>`<b>${esc(sN(c.nombre))}</b> (CV ${c.consist.cv.toFixed(0)}%)`).join(", ")}.</p>
+${nc.length>0?`<h2>Requieren Atencion</h2><p>${nc.map(c=>`<b>${esc(c.nombre)}</b> (#${c.rank}) con ${fN(c.pfH)} f/h, ${fN(Math.abs(c.pfH-data.avg))} bajo promedio`).join(". ")}.</p>`:""}
+<h2>Ranking</h2><table><thead><tr><th>#</th><th>Cajero</th><th>Fact</th><th>Hrs</th><th>F/H</th><th>Consist</th><th>KPI</th></tr></thead><tbody>${rows}</tbody></table>
+<h2>Conclusiones</h2><p>${cu.length>0?`Reconocer a los ${cu.length} que cumplen, especialmente ${esc(t3[0].nombre)}. `:""}${nc.length>0?`Para los ${nc.length} que no cumplen: (1) retroalimentacion individual, (2) plan de mejora semanal, (3) seguimiento quincenal.`:"Buen nivel general. Buscar mejora continua."}</p>
+<div class="ft">${new Date().toLocaleDateString("es-CO")}</div>`;}
+
+function narAllInd(data){return data.cajeros.map((c,i)=>`${i>0?'<div class="pb"></div>':""}${narInd(c,data)}`).join("");}
+
+function dlReport(html,title){const full=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>${PCSS}\n.print-btn{position:fixed;top:10px;right:10px;padding:12px 28px;background:#1a6b3c;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 15px rgba(0,0,0,.3);z-index:9999}.print-btn:hover{background:#0d4a28}@media print{.print-btn{display:none!important}}</style></head><body><button class="print-btn" onclick="window.print()">Guardar como PDF</button>${html}<script>window.onload=function(){setTimeout(function(){window.print()},600)}<\/script></body></html>`;
+  const blob=new Blob([full],{type:"text/html;charset=utf-8"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`${title.replace(/[^a-zA-Z0-9_\- ]/g,"").replace(/\s+/g,"_")}.html`;document.body.appendChild(a);a.click();setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url);},300);toast("✅ Informe descargado");}
+
+/* ═══ UI ═══ */
+const Btn=({onClick,children,green,small})=><button onClick={onClick} style={{padding:small?"5px 10px":"8px 16px",borderRadius:10,border:"none",fontSize:small?11:13,fontWeight:600,cursor:"pointer",background:green?"#27ae60":CL.pri,color:"#fff"}}>{children}</button>;
+function toast(msg,ms=2000){const d=document.createElement("div");d.textContent=msg;d.style.cssText="position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#1a6b3c;color:#fff;padding:10px 24px;border-radius:10px;font-size:13px;font-weight:700;z-index:99999;box-shadow:0 4px 15px rgba(0,0,0,.3);transition:opacity .3s";document.body.appendChild(d);setTimeout(()=>{d.style.opacity="0";setTimeout(()=>d.remove(),300);},ms);}
+const KC=({label,value,color,big})=><div style={{background:`${color}12`,borderRadius:12,padding:"12px",border:`1px solid ${color}30`,flex:big?"1.4 1 170px":"1 1 130px",minWidth:115}}><div style={{fontSize:big?20:17,fontWeight:800,color}}>{value}</div><div style={{fontSize:11,color:CL.txtL}}>{label}</div></div>;
+const Bg=({color,children})=><span style={{display:"inline-flex",alignItems:"center",gap:3,padding:"3px 9px",borderRadius:18,fontSize:11,fontWeight:600,background:`${color}18`,color,border:`1px solid ${color}30`}}>{children}</span>;
+const rBadge=c=>c.activo===false?" ⛔":"";
+const crd={background:CL.card,borderRadius:14,padding:"18px",boxShadow:"0 1px 6px rgba(0,0,0,.06)",border:"1px solid #e8ece9"};
+const TH={padding:"7px 9px",textAlign:"left",fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".4px",color:CL.txtL,borderBottom:"2px solid #e8ece9",whiteSpace:"nowrap"};
+const TD={padding:"6px 9px",fontSize:12,borderBottom:"1px solid #f0f2f1"};
+const SL={padding:"10px 12px",borderRadius:10,border:`2px solid ${CL.pri}40`,fontSize:14,background:"#fff",color:CL.txt,outline:"none",cursor:"pointer",minWidth:220};
+
+const KPIBanner=({data})=>{const k=kpiT(data);return <div style={{...crd,padding:"8px 14px",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",background:k.custom?"#fff9e6":"#f8faf8",border:`1px solid ${k.custom?"#f39c1240":"#e8ece9"}`}}><span style={{fontSize:16}}>{k.custom?"⚙️":"📊"}</span><div style={{flex:1,fontSize:12}}><span style={{fontWeight:700,color:k.custom?CL.warn:CL.pri}}>{k.custom?"KPIs Personalizados":"KPIs Auto"}</span><span style={{color:CL.txtL,marginLeft:6}}>Cumple ≥ <b style={{color:"#2ecc71"}}>{fN(k.cumple)}</b> | En prom ≥ <b style={{color:"#f39c12"}}>{fN(k.enProm)}</b></span></div></div>;};
+
+/* ═══ UPLOAD ═══ */
+function parsePersonnel(jr){
+  const hd=jr[0].map(h=>String(h||"").trim().toUpperCase());
+  const fc=ks=>{for(const k of ks){const idx=hd.findIndex(h=>h.includes(k));if(idx>=0)return idx;}return-1;};
+  const cNom=fc(["NOMBRE DEL EMPLEADO","NOMBRE EMPLEADO","NOMBRE"]);
+  const cSede=fc(["DESCRIPCION C.O","DESC C.O","SEDE"]);
+  const cRetiro=fc(["FECHA RETIRO","RETIRO"]);
+  const cCargo=fc(["DESCRIPCION DEL CARGO","DESC CARGO","CARGO"]);
+  const cCcosto=fc(["DESCRIPCION CCOSTO","DESC CCOSTO","CCOSTO","CENTRO COSTO","SECCION"]);
+  if(cNom<0)return null;
+  const map={};
+  for(let i=1;i<jr.length;i++){const r=jr[i];if(!r||!r[cNom])continue;
+    const nm=String(r[cNom]).trim().toUpperCase();
+    const sede=cSede>=0?String(r[cSede]||"").trim():"";
+    const cargo=cCargo>=0?String(r[cCargo]||"").trim():"";
+    const ccosto=cCcosto>=0?String(r[cCcosto]||"").trim():"";
+    let retiro=null;if(cRetiro>=0&&r[cRetiro]){const v=r[cRetiro];if(v instanceof Date)retiro=v;else if(typeof v==="string"&&v.trim())retiro=parseDate(v);else if(typeof v==="number")retiro=parseDate(v);}
+    map[nm]={sede,cargo,ccosto,retiro,activo:!retiro};
   }
-
-  for (var i = 1; i < rows.length; i++) {
-    var w = rows[i];
-    if (!w) continue;
-    if (esSubtotal(w)) continue;
-    var hora = w[iHora];
-    if (hora == null || isNaN(Number(hora))) continue;
-    results.push({
-      seccion: String(w[iSeccion]||""),
-      clase:   String(w[iClase]||""),
-      sede:    normSede(w[iSede]),
-      hora:    Number(hora),
-      mes:     String(w[iMes]),
-      dia:     Number(w[iDia])||0,
-      semana:  iSemana >= 0 ? (Number(w[iSemana])||0) : 0,
-      nfact:   Number(w[iNFact])||0,
-      cantReg: iCantReg >= 0 ? (Number(w[iCantReg])||0) : 0,
-      venta:   Number(w[iVenta])||0,
-    });
-  }
-  return results;
+  return map;
 }
 
-/* === BUILD CHART DATA === */
-// Formateo inteligente de dinero en pesos colombianos
-function fmtMoney(n) {
-  if (n == null || isNaN(n)) return "$0";
-  var v = Math.abs(n);
-  var sign = n < 0 ? "-" : "";
-  if (v >= 1e12) return sign + "$" + (v/1e12).toFixed(2) + " B";  // Billones
-  if (v >= 1e9)  return sign + "$" + (v/1e9).toFixed(2) + " MM"; // Miles de millones
-  if (v >= 1e6)  return sign + "$" + (v/1e6).toFixed(1) + " M";  // Millones
-  if (v >= 1e3)  return sign + "$" + Math.round(v/1e3) + " K";
-  return sign + "$" + Math.round(v);
-}
-
-// Precalcular los índices numéricos de HC una sola vez
-var HC_NUM = HC.map(function(hc){ return parseInt(hc.split(":")[0]); });
-var HC_MAP = {};
-HC_NUM.forEach(function(h, i){ HC_MAP[h] = i; });
-
-function buildChart(marc, fact, f) {
-  // -- Aplicar todos los filtros en UN SOLO recorrido sobre marcaciones --
-  const quincenaVal = f.quincena && f.quincena !== "Todos" ? (f.quincena === "Quincena" ? "Si" : "No") : null;
-  const fm = marc.filter(function(m) {
-    if (f.sede    !== "Todas"  && m.DEPENDENCIA  !== f.sede)    return false;
-    if (f.seccion !== "Todas"  && m.CENTROCOSTO  !== f.seccion) return false;
-    if (f.mes     !== "Todos"  && m.MES          !== f.mes)     return false;
-    if (f.dsem    !== "Todos"  && m.DIA_SEMANA   !== f.dsem)    return false;
-    if (f.semana  !== "Todas"  && m.SEMANA       !== f.semana)  return false;
-    if (f.dia     !== "Todos"  && String(m.DIA)  !== f.dia)     return false;
-    if (quincenaVal !== null   && m.QUINCENA     !== quincenaVal) return false;
-    return true;
-  });
-
-  // -- Filtrar facturas usando campos enriquecidos (dsem, quincena, semana) --
-  const quincenaValF = f.quincena && f.quincena !== "Todos" ? (f.quincena === "Quincena" ? "Si" : "No") : null;
-  const ff = fact.filter(function(x) {
-    if (f.sede    !== "Todas" && x.sede    !== f.sede)    return false;
-    if (f.clase   !== "Todas" && x.clase   !== f.clase)   return false;
-    if (f.area    && f.area  !== "Todas" && x.seccion !== f.area) return false;
-    if (f.mes     !== "Todos" && x.mes     !== f.mes)     return false;
-    if (f.dia     !== "Todos" && String(x.dia) !== f.dia) return false;
-    // Filtros nuevos sobre campos enriquecidos
-    if (f.dsem    !== "Todos" && x.dsem    && x.dsem    !== f.dsem)    return false;
-    if (f.semana  !== "Todas" && x.semana  && x.semana  !== f.semana)  return false;
-    if (quincenaValF !== null && x.quincena && x.quincena !== quincenaValF) return false;
-    return true;
-  });
-
-  // -- Contar fechas únicas una sola vez --
-  const fechasSet = {};
-  fm.forEach(function(m){ fechasSet[m.FECHA] = true; });
-  const nd = Object.keys(fechasSet).length || 1;
-
-  // -- Acumular colaboradores por hora en un solo recorrido --
-  const coByHora = new Float64Array(HC.length); // array tipado, más rápido que objeto
-  fm.forEach(function(m) {
-    for (var i = 0; i < HC.length; i++) coByHora[i] += (m[HC[i]] || 0);
-  });
-
-  // -- Acumular transacciones por hora en un solo recorrido --
-  const ttByHora  = new Float64Array(HC.length);
-  const dfByHora  = new Array(HC.length).fill(null).map(function(){ return {}; });
-  ff.forEach(function(x) {
-    var idx = HC_MAP[x.hora];
-    if (idx !== undefined) {
-      ttByHora[idx] += x.nfact;
-      dfByHora[idx][x.dia + x.mes] = true;
+function Upload({onData}){const r1=useRef(),r2=useRef(),r3=useRef(),r4=useRef();const[mD,setMD]=useState(null);const[sD,setSD]=useState(null);const[bdP,setBdP]=useState(null);const[st,setSt]=useState("");const[er,setEr]=useState(null);
+  const rf=useCallback(async f=>{const buf=await f.arrayBuffer();const nm=f.name.toLowerCase();
+    if(nm.endsWith(".csv")){
+      let txt;try{txt=new TextDecoder("utf-8",{fatal:true}).decode(buf);}catch(e){txt=new TextDecoder("latin1").decode(buf);}
+      const rows=[];let cur="",inQ=false;const pushRow=()=>{rows.push(cur.split(",").map(c=>{c=c.trim();if(c.startsWith('"')&&c.endsWith('"'))c=c.slice(1,-1).replace(/""/g,'"');return c;}));cur="";};
+      for(const ch of txt){if(ch==='"')inQ=!inQ;else if(ch==="\n"&&!inQ){pushRow();}else{cur+=ch;}}if(cur.trim())pushRow();
+      return rows;
     }
-  });
+    const wb=XLSX.read(buf,{type:"array",cellDates:false,raw:false});return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true,defval:""});
+  },[]);
+  const lm=useCallback(async f=>{setEr(null);setSt("Leyendo...");try{const j=await rf(f);setSt(`${j.length-1} registros.`);setMD(j);}catch(e){setEr(e.message);}},[rf]);
+  const ls=useCallback(async f=>{setEr(null);setSt("Leyendo marcaciones...");try{const j=await rf(f);
+    if(!j||j.length<2){setEr("Archivo vacio: "+(j?j.length:0)+" filas");return;}
+    toast("Leido: "+j.length+" filas | "+String(j[0]).substring(0,60),4000);
+    const m=processSchedule(j);if(!m){setEr("No encontro columnas. Headers: "+j[0].slice(0,8).join(", "));return;}
+    const cnt=Object.keys(m.data).length;const s1=Object.values(m.data)[0];
+    const byDayN=s1&&s1.byDay?Object.keys(s1.byDay).length:0;const byDaySample=s1&&s1.byDay?Object.keys(s1.byDay)[0]:"none";
+    toast(cnt+" emp | byCed:"+m.byCed+" | ej:"+((s1&&s1.nombre)?s1.nombre.substring(0,20):"?")+" "+((s1)?s1.hrs:0)+"h byDay:"+byDayN+" sample:"+byDaySample,6000);
+    setSD(m);setSt("Marcaciones: "+cnt+" empleados");}catch(e){setEr("Error: "+e.message);toast("ERROR: "+e.message,5000);}},[rf]);
+  const lbd=useCallback(async f=>{setEr(null);setSt("Leyendo base de datos...");try{const j=await rf(f);const m=parsePersonnel(j);if(!m){setEr("No se encontro columna 'Nombre del empleado'.");return;}
+    const total=Object.keys(m).length;const activos=Object.values(m).filter(v=>v.activo).length;
+    setBdP(m);setSt(`BD Personal: ${total} empleados (${activos} activos, ${total-activos} retirados).`);}catch(e){setEr(e.message);}},[rf]);
+  const lj=useCallback(async f=>{setEr(null);setSt("Cargando memoria...");try{const txt=await f.text();const json=JSON.parse(txt);const d=loadSnapshot(json);
+    if(!d){setEr("Archivo no valido.");return;}
+    setSt(`✅ Memoria: ${d.sede} | ${d.cajeros.length} cajeros`);
+    setTimeout(()=>onData(d),600);}catch(e){setEr("Error: "+e.message);}},[onData]);
+  const go=useCallback(()=>{if(!mD)return;setSt("Procesando...");setEr(null);setTimeout(()=>{try{const d=processData(mD,sD,bdP);
+    const matched=d.cajeros.filter(c=>c.hrsHor!==null).length;
+    const c1=d.cajeros[0];const c1info=c1?c1.nombre.substring(0,20)+"|hrsHor:"+c1.hrsHor+"|hrsMar:"+c1.totalHrsMar:"none";
+    const sdSample=sD?Object.values(sD.data)[0]:null;const sdName=sdSample&&sdSample.nombre?sdSample.nombre.substring(0,25):"NO_NAME";
+    const msg=d.hasSched?matched+"/"+d.cajeros.length+" match | TRUE | "+c1info:d.cajeros.length+"caj | FALSE | sD:"+(sD?"byCed:"+sD.byCed:"NULL")+" | sdName:"+sdName+" | caj1:"+c1info;
+    toast(msg,8000);setTimeout(()=>onData(d),900);}catch(e){setEr(e.message);toast("ERROR: "+e.message,5000);}},200);},[mD,sD,bdP,onData]);
+  return(<div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:`linear-gradient(135deg,${CL.priDk},${CL.pri},#1a8c4e)`,padding:20}}>
+    <div style={{textAlign:"center",maxWidth:560,width:"100%"}}><div style={{fontSize:42,marginBottom:8}}>📊</div><h1 style={{color:"#fff",fontSize:26,fontWeight:800,marginBottom:4}}>Auditoria de Cajeros</h1><p style={{color:"rgba(255,255,255,.7)",fontSize:14,marginBottom:24}}>Sistema de productividad</p>
+      <div onClick={()=>r1.current?.click()} style={{background:mD?"rgba(46,204,113,.2)":"rgba(255,255,255,.1)",border:`2px dashed ${mD?"rgba(46,204,113,.6)":"rgba(255,255,255,.35)"}`,borderRadius:16,padding:"28px 20px",cursor:"pointer",marginBottom:12}}>
+        <input ref={r1} type="file" accept=".xlsx,.xls,.xlsm,.csv" style={{display:"none"}} onChange={e=>e.target.files[0]&&lm(e.target.files[0])}/><div style={{fontSize:28,marginBottom:4}}>{mD?"✅":"📁"}</div><p style={{color:"#fff",fontSize:14,fontWeight:600}}>{mD?`Registros cargados (${mD.length-1} filas)`:"1. Sube el archivo de REGISTROS"}</p></div>
+      <div onClick={()=>r2.current?.click()} style={{background:sD?"rgba(46,204,113,.2)":"rgba(255,255,255,.06)",border:`2px dashed ${sD?"rgba(46,204,113,.6)":"rgba(255,255,255,.2)"}`,borderRadius:16,padding:"18px",cursor:"pointer",marginBottom:16}}>
+        <input ref={r2} type="file" accept=".xlsx,.xls,.xlsm,.csv" style={{display:"none"}} onChange={e=>e.target.files[0]&&ls(e.target.files[0])}/><div style={{fontSize:22,marginBottom:2}}>{sD?"✅":"📊"}</div><p style={{color:"#fff",fontSize:13,fontWeight:600}}>{sD?`Marcaciones cargadas`:"2. Sube MARCACIONES (entrada/salida)"}</p><p style={{color:"rgba(255,255,255,.4)",fontSize:11}}>Para el ranking R/H y horas laboradas</p></div>
+      <div onClick={()=>r4.current?.click()} style={{background:bdP?"rgba(46,204,113,.2)":"rgba(255,255,255,.06)",border:`2px dashed ${bdP?"rgba(46,204,113,.6)":"rgba(255,255,255,.2)"}`,borderRadius:16,padding:"18px",cursor:"pointer",marginBottom:16}}>
+        <input ref={r4} type="file" accept=".xlsx,.xls,.xlsm,.csv" style={{display:"none"}} onChange={e=>e.target.files[0]&&lbd(e.target.files[0])}/><div style={{fontSize:22,marginBottom:2}}>{bdP?"✅":"👥"}</div><p style={{color:"#fff",fontSize:13,fontWeight:600}}>{bdP?`BD Personal cargada (${Object.keys(bdP).length})`:"3. (Opcional) Sube MAESTRO DE PERSONAL"}</p><p style={{color:"rgba(255,255,255,.4)",fontSize:11}}>Para identificar activos vs retirados</p></div>
+      {mD&&sD&&<button onClick={go} style={{padding:"14px 40px",borderRadius:14,border:"none",background:"#fff",color:CL.pri,fontSize:16,fontWeight:800,cursor:"pointer",boxShadow:"0 4px 20px rgba(0,0,0,.2)"}}>🚀 Procesar</button>}
+      {mD&&!sD&&<p style={{color:"rgba(255,255,255,.6)",fontSize:12,textAlign:"center"}}>⬆️ Sube las marcaciones para continuar</p>}
+      <div style={{marginTop:24,paddingTop:20,borderTop:"1px solid rgba(255,255,255,.15)"}}>
+        <p style={{color:"rgba(255,255,255,.5)",fontSize:12,marginBottom:10}}>¿Ya tienes un analisis guardado?</p>
+        <button onClick={()=>r3.current?.click()} style={{padding:"12px 28px",borderRadius:12,border:"2px solid rgba(255,255,255,.3)",background:"rgba(255,255,255,.08)",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer"}}>💾 Cargar Memoria (.json)</button>
+        <input ref={r3} type="file" accept=".json" style={{display:"none"}} onChange={e=>e.target.files[0]&&lj(e.target.files[0])}/>
+        <p style={{color:"rgba(255,255,255,.35)",fontSize:11,marginTop:6}}>Carga un .json guardado previamente para ver el analisis sin necesidad de los archivos originales</p></div>
+      {st&&<p style={{color:"rgba(255,255,255,.8)",fontSize:13,marginTop:10,fontWeight:600}}>{st}</p>}
+      {er&&<div style={{marginTop:10,padding:"8px 14px",background:"rgba(231,76,60,.2)",borderRadius:12,color:"#fff",fontSize:13}}>⚠️ {er}</div>}</div></div>);}
 
-  return HC.map(function(hc, i) {
-    var df = Object.keys(dfByHora[i]).length || 1;
-    return {
-      hora: HL[i],
-      colaboradores: Math.round(coByHora[i] / nd * 10) / 10,
-      transacciones: Math.round(ttByHora[i] / df * 10) / 10,
-    };
-  });
+/* ═══ FILTER BAR ═══ */
+function FilterBar({data,from,to,setFrom,setTo,sedes,sedeFilter,setSedeFilter,hasBD,showRetirados,setShowRetirados,ccostos,ccostoFilter,setCcostoFilter}){const mn=data.allDates?.[0]||"",mx=data.allDates?.[data.allDates.length-1]||"";const active=from||to;const invalid=from&&to&&from>to;
+  return <div style={{...crd,padding:"10px 16px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",background:invalid?"#fde8e8":active||sedeFilter||!showRetirados||ccostoFilter?"#fff9e6":"#f8faf8"}}>
+    {sedes.length>1&&<><span style={{fontSize:14}}>🏢</span><select value={sedeFilter} onChange={e=>setSedeFilter(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"2px solid #9b59b6",fontSize:12,fontWeight:600,maxWidth:200}}>
+      <option value="">Todas las sedes ({sedes.length})</option>{sedes.map(s=><option key={s} value={s}>{s}</option>)}</select></>}
+    {ccostos.length>1&&<><span style={{fontSize:14}}>🏷️</span><select value={ccostoFilter} onChange={e=>setCcostoFilter(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"2px solid #e67e22",fontSize:12,fontWeight:600,maxWidth:220}}>
+      <option value="">Todas las secciones ({ccostos.length})</option>{ccostos.map(s=><option key={s} value={s}>{s}</option>)}</select></>}
+    {hasBD&&<label style={{display:"flex",alignItems:"center",gap:4,fontSize:12,fontWeight:600,color:showRetirados?"#e74c3c":"#2ecc71",cursor:"pointer"}}>
+      <input type="checkbox" checked={!showRetirados} onChange={e=>setShowRetirados(!e.target.checked)}/>{showRetirados?"👥 Con retirados":"✅ Solo activos"}</label>}
+    <span style={{fontSize:14}}>📅</span><span style={{fontSize:12,fontWeight:700,color:CL.txtL}}>Fechas:</span>
+    <input type="date" value={from} min={mn} max={to||mx} onChange={e=>setFrom(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:`1px solid ${invalid?"#e74c3c":"#ddd"}`,fontSize:12}}/>
+    <span style={{fontSize:12,color:CL.txtL}}>a</span>
+    <input type="date" value={to} min={from||mn} max={mx} onChange={e=>setTo(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:`1px solid ${invalid?"#e74c3c":"#ddd"}`,fontSize:12}}/>
+    {(active||sedeFilter||ccostoFilter)&&<button onClick={()=>{setFrom("");setTo("");setSedeFilter("");setCcostoFilter("");}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid #e74c3c",background:"#fff",color:"#e74c3c",fontSize:11,cursor:"pointer",fontWeight:600}}>✕ Limpiar</button>}
+    {invalid&&<span style={{fontSize:11,color:CL.dan,fontWeight:600}}>❌ Desde no puede ser mayor que Hasta</span>}
+    {(active||sedeFilter||ccostoFilter)&&!invalid&&<span style={{fontSize:11,color:CL.warn,fontWeight:600}}>⚠️ Filtro{sedeFilter?` | ${sedeFilter}`:""}{ccostoFilter?` | ${ccostoFilter}`:""}</span>}
+  </div>;}
+
+/* ═══ DASHBOARD ═══ */
+function Dash({data,showR}){
+  if(!data.cajeros.length)return <div style={{...crd,textAlign:"center",padding:40,color:CL.txtL}}><div style={{fontSize:40}}>📭</div><p style={{fontSize:14,fontWeight:600}}>Sin datos en este rango de fechas</p><p style={{fontSize:12}}>Ajusta el filtro de fechas para ver resultados.</p></div>;
+  const t5=data.cajeros.slice(0,5),b3=data.cajeros.slice(-3).reverse();const ch=data.cajeros.map(c=>({n:sN(c.nombre),fH:+c.pfH.toFixed(2)}));const sc=data.dS.map(d=>({f:d.fechaD,fH:+d.fH.toFixed(2)}));
+  const sedeTH=data.cajeros.reduce((s,c)=>s+c.hrsEfec,0),sedeTD=data.cajeros.reduce((s,c)=>s+c.numDias,0);
+  const pp=[{name:"Cumplen",value:data.cajeros.filter(c=>c.kpi.lab==="Cumple").length,fill:"#2ecc71"},{name:"En Prom",value:data.cajeros.filter(c=>c.kpi.lab==="En promedio").length,fill:"#f39c12"},{name:"No Cumplen",value:data.cajeros.filter(c=>c.kpi.lab==="No cumple").length,fill:"#e74c3c"}];
+  // Weekly trend
+  const weeks=useMemo(()=>{const w={};const meses=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];data.dS.forEach(d=>{const dt=new Date(d.fecha+"T12:00:00");const wk=`${meses[dt.getMonth()]}-S${Math.ceil(dt.getDate()/7)}`;if(!w[wk])w[wk]={fH:[],f:0,r:0};w[wk].fH.push(d.fH);w[wk].f+=d.facs;w[wk].r+=d.regs;});return Object.entries(w).map(([k,v])=>({sem:k,fH:+(v.fH.reduce((a,b)=>a+b,0)/v.fH.length).toFixed(2),fact:v.f}));},[data]);
+  // Dead hours (sede-wide hourly)
+  const hSede=useMemo(()=>{const h={};for(let i=0;i<24;i++)h[i]={regs:0,dias:0};data.cajeros.forEach(c=>c.hA.forEach(ha=>{h[ha.hora].regs+=ha.regs;h[ha.hora].dias=Math.max(h[ha.hora].dias,ha.dias);}));
+    return Object.entries(h).filter(([,v])=>v.regs>0).map(([k,v])=>({hora:`${k}:00`,regs:v.regs,h:+k})).sort((a,b)=>a.h-b.h);},[data]);
+  const peakH=hSede.length>0?hSede.reduce((a,b)=>a.regs>b.regs?a:b):null;
+  const deadH=hSede.length>2?hSede.filter(h=>h.regs>0).sort((a,b)=>a.regs-b.regs).slice(0,3):[];
+  return <div style={{display:"flex",flexDirection:"column",gap:14}}>
+    <KPIBanner data={data}/>
+    <div style={{...crd,background:`linear-gradient(135deg,${CL.priDk},${CL.pri})`,color:"#fff",padding:"12px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+      <div><div style={{fontSize:12,opacity:.8}}>Sede</div><div style={{fontSize:18,fontWeight:700}}>{data.sede}</div></div>
+      <div style={{display:"flex",gap:6}}><Btn onClick={()=>showR({html:narGen(data),title:`General - ${data.sede}`})}>📄 Informe</Btn><Btn green onClick={()=>exAll(data)}>📥 Excel</Btn></div>
+      <div style={{textAlign:"right"}}><div style={{fontSize:12,opacity:.8}}>Periodo</div><div style={{fontSize:14,fontWeight:600}}>{fDF(new Date(data.periodo.desde+"T12:00:00"))} a {fDF(new Date(data.periodo.hasta+"T12:00:00"))}</div></div></div>
+    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}><KC label="Cajeros" value={data.cajeros.length} color={CL.pri}/><KC label="Facturas" value={data.tF.toLocaleString()} color="#3498db"/><KC label="Registros" value={data.tR.toLocaleString()} color="#9b59b6"/><KC label="Prom F/H" value={fN(data.avg)} color="#e67e22"/><KC label="Prom R/H" value={fN(data.avgR)} color="#2ecc71"/>
+      <KC label="Prom Hrs/Dia" value={sedeTD>0?(sedeTH/sedeTD).toFixed(1):"—"} color="#8e44ad"/><KC label="Total Hrs" value={Math.round(sedeTH)+"h"} color="#2c3e50"/></div>
+    <div className="desk-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+      <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>🏆 Top 5</h3>{t5.map((c,i)=><div key={c.nombre} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:i<4?"1px solid #f0f2f1":"none"}}><div style={{width:26,height:26,borderRadius:"50%",background:rColor(i+1,data.cajeros.length),color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:11,flexShrink:0}}>{i+1}</div><div style={{flex:1,fontSize:12,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.nombre}{rBadge(c)}</div><div style={{fontSize:13,fontWeight:800,color:CL.pri}}>{fN(c.pfH)}</div><Bg color={c.consist.cl}>{c.consist.label}</Bg></div>)}</div>
+      <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>📊 KPI</h3><ResponsiveContainer width="100%" height={130}><PieChart><Pie data={pp} cx="50%" cy="50%" outerRadius={50} dataKey="value" label={e=>`${e.name}:${e.value}`}>{pp.map((e,i)=><Cell key={i} fill={e.fill}/>)}</Pie><Tooltip/></PieChart></ResponsiveContainer>
+        <h4 style={{fontSize:12,fontWeight:700,marginTop:4}}>⚠️ Atencion</h4>{b3.map(c=><div key={c.nombre} style={{display:"flex",gap:6,padding:"2px 0",fontSize:11}}><span style={{fontWeight:800,color:CL.dan}}>#{c.rank}</span><span style={{flex:1,fontWeight:600}}>{sN(c.nombre)}{rBadge(c)}</span><span style={{fontWeight:800,color:CL.dan}}>{fN(c.pfH)}</span></div>)}</div></div>
+    <div className="desk-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+      <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>📈 Tendencia Semanal</h3>
+        <ResponsiveContainer width="100%" height={160}><ComposedChart data={weeks}><CartesianGrid strokeDasharray="3 3" stroke="#eee"/><XAxis dataKey="sem" tick={{fontSize:11}}/><YAxis tick={{fontSize:10}}/><Tooltip/><Bar dataKey="fH" fill={`${CL.pri}40`} radius={[4,4,0,0]}/><Line type="monotone" dataKey="fH" stroke={CL.pri} strokeWidth={2.5} dot={{r:4}} name="Prom F/H"/></ComposedChart></ResponsiveContainer>
+        <p style={{fontSize:11,color:CL.txtL,marginTop:4}}>{weeks.length>=2?(weeks[weeks.length-1].fH>weeks[0].fH?`📈 Tendencia al alza: +${fN(weeks[weeks.length-1].fH-weeks[0].fH)} f/h`:`📉 Tendencia a la baja: ${fN(weeks[weeks.length-1].fH-weeks[0].fH)} f/h`):"Solo 1 semana"}</p></div>
+      <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>⏰ Actividad por Hora</h3>
+        {hSede.length>0?<><ResponsiveContainer width="100%" height={160}><BarChart data={hSede}><CartesianGrid strokeDasharray="3 3" stroke="#eee"/><XAxis dataKey="hora" tick={{fontSize:9}}/><YAxis tick={{fontSize:9}}/><Tooltip/><Bar dataKey="regs" name="Registros" radius={[3,3,0,0]}>{hSede.map(h=><Cell key={h.hora} fill={deadH.some(d=>d.hora===h.hora)?"#e74c3c40":CL.pri}/>)}</Bar></BarChart></ResponsiveContainer>
+        <div style={{fontSize:11,marginTop:4}}>{peakH&&<span style={{color:CL.pri,fontWeight:700}}>🔥 Pico: {peakH.hora}</span>}{deadH.length>0&&<span style={{color:CL.dan,fontWeight:600,marginLeft:8}}>💤 Muertas: {deadH.map(d=>d.hora).join(", ")}</span>}</div></>
+        :<p style={{fontSize:12,color:CL.txtL,padding:20,textAlign:"center"}}>Sin datos horarios disponibles</p>}</div></div>
+    <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>📊 Ranking F/H + Consistencia</h3>
+      <ResponsiveContainer width="100%" height={280}><BarChart data={ch} margin={{left:8,right:8,bottom:50}}><CartesianGrid strokeDasharray="3 3" stroke="#eee"/><XAxis dataKey="n" tick={{fontSize:9,fill:CL.txtL}} angle={-40} textAnchor="end" interval={0}/><YAxis tick={{fontSize:10}}/><Tooltip/><Bar dataKey="fH" name="F/H" radius={[5,5,0,0]}>{ch.map((_,i)=><Cell key={i} fill={rColor(i+1,data.cajeros.length)}/>)}</Bar></BarChart></ResponsiveContainer></div>
+    <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>📅 Sede Diaria</h3>
+      <ResponsiveContainer width="100%" height={180}><ComposedChart data={sc}><CartesianGrid strokeDasharray="3 3" stroke="#eee"/><XAxis dataKey="f" tick={{fontSize:10}}/><YAxis tick={{fontSize:10}}/><Tooltip/><Area type="monotone" dataKey="fH" fill={`${CL.pri}20`} stroke="none"/><Line type="monotone" dataKey="fH" stroke={CL.pri} strokeWidth={2.5} dot={{r:3}} name="F/H"/></ComposedChart></ResponsiveContainer></div>
+    <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>📋 Ranking {data.hasSched?"(R/H Marcación)":"(F/H Efectiva)"}</h3><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["#","Cajero","Reg","Fact","Dias Reg",...(data.hasSched?["Dias Mar","H.Mar","R/HMar"]:[]),"H.Efec","F/HEfec","Min/Fact","Consist","KPI"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead><tbody>
+      {data.cajeros.map((c,idx)=>{const mf=c.tF>0?((c.hrsEfec*60)/c.tF).toFixed(1):"—";const rc=rColor(c.rank,data.cajeros.length);const bg=c.kpi.lab==="Cumple"?"#f0faf4":c.kpi.lab==="No cumple"?"#fef5f5":idx%2===0?"#fff":"#f8faf8";return <tr key={c.nombre} style={{background:bg}}><td style={{...TD,fontWeight:800,color:rc}}>{c.rank}</td><td style={{...TD,fontWeight:600,fontSize:11}}>{c.nombre}{rBadge(c)}{c.diasFallidos>0&&<span style={{color:"#e67e22",fontSize:9,marginLeft:2}}>⚠{c.diasFallidos}f</span>}</td><td style={TD}>{c.tR.toLocaleString()}</td><td style={TD}>{c.tF.toLocaleString()}</td><td style={TD}>{c.numDias}</td>{data.hasSched&&<><td style={{...TD,color:"#8e44ad"}}>{c.diasMarValid||"-"}</td><td style={{...TD,fontSize:11,color:"#8e44ad"}}>{c.totalHrsMar?fH(c.totalHrsMar):"-"}</td><td style={{...TD,fontWeight:800,color:CL.pri,fontSize:13}}>{c.totalHrsMar>0?fN(c.rHMar):"-"}</td></>}<td style={{...TD,fontSize:11}}>{fH(c.hrsEfec)}</td><td style={{...TD,fontWeight:data.hasSched?400:700,color:data.hasSched?CL.txtL:CL.pri}}>{fN(c.pfH)}</td><td style={{...TD,fontSize:11,color:"#3498db"}}>{mf}</td><td style={TD}><Bg color={c.consist.cl}>{c.consist.label}</Bg></td><td style={TD}><Bg color={c.kpi.cl}>{c.kpi.ic} {c.kpi.lab}</Bg></td></tr>})}</tbody></table></div></div></div>;}
+
+/* ═══ INDIVIDUAL ═══ */
+function Indiv({data,sel,setSel,showR}){const c=data.cajeros.find(x=>x.nombre===sel);const[busq,setBusq]=useState("");
+  const filtrados=busq?data.cajeros.filter(x=>x.nombre.toLowerCase().includes(busq.toLowerCase())):data.cajeros;
+  return <div style={{display:"flex",flexDirection:"column",gap:14}}>
+    <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+      <input type="text" placeholder="🔍 Buscar cajero..." value={busq} onChange={e=>setBusq(e.target.value)} style={{padding:"7px 12px",borderRadius:8,border:"2px solid #ddd",fontSize:12,width:160,outline:"none"}}/>
+      <select style={SL} value={sel||""} onChange={e=>{setSel(e.target.value);setBusq("");}}><option value="">-- Seleccionar ({filtrados.length}) --</option>{filtrados.map(c=><option key={c.nombre} value={c.nombre}>#{c.rank} {c.nombre}{rBadge(c)}</option>)}</select>
+      {c&&<Btn onClick={()=>showR({html:narInd(c,data),title:`Informe - ${c.nombre}`})}>📄 Informe</Btn>}{c&&<Btn green onClick={()=>exInd(c,data)}>📥 Excel</Btn>}</div>
+    {c?<><div style={{...crd,background:`linear-gradient(135deg,${CL.priDk},${CL.pri})`,color:"#fff"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}><div><div style={{fontSize:10,opacity:.7}}>FICHA</div><h2 style={{margin:"4px 0",fontSize:20,fontWeight:800}}>{c.nombre}{rBadge(c)}</h2><div style={{fontSize:12,opacity:.85}}>{c.sede} - {c.cedula}</div></div><div style={{textAlign:"center",background:"rgba(255,255,255,.15)",borderRadius:12,padding:"10px 20px"}}><div style={{fontSize:30,fontWeight:900}}>#{c.rank}</div><div style={{fontSize:10,opacity:.8}}>de {data.cajeros.length}</div></div></div><div style={{marginTop:10,padding:"7px 12px",background:`${c.frase.cl}30`,borderRadius:8,fontSize:13}}>{c.frase.em} {c.frase.tx} - {c.kpi.ic} {c.kpi.lab}</div></div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><KC label="Registros" value={c.tR.toLocaleString()} color="#9b59b6"/><KC label="Facturas" value={c.tF.toLocaleString()} color="#3498db"/><KC label="Dias Reg" value={c.numDias} color="#e67e22"/>
+        {c.diasMarValid>0&&<KC label="Dias Mar" value={c.diasMarValid} color="#8e44ad"/>}
+        <KC label="Hrs Efec" value={fH(c.hrsEfec)} color="#2ecc71"/>
+        {c.totalHrsMar>0&&<KC label="Hrs Mar" value={fH(c.totalHrsMar)} color="#8e44ad"/>}
+        {c.totalHrsMar>0&&<KC label="R/H Mar" value={fN(c.rHMar)} color={CL.pri} big/>}
+        <KC label="F/H Efec" value={fN(c.pfH)} color={c.totalHrsMar>0?CL.txtL:CL.pri} big={!c.totalHrsMar}/>
+        {c.hrsHor!==null&&c.hrsHor>0&&<KC label="Aprovech." value={((c.hrsEfec/c.hrsHor)*100).toFixed(1)+"%"} color={c.hrsEfec/c.hrsHor>=.9?"#2ecc71":"#e74c3c"}/>}
+        {c.diasNoLab!==null&&<KC label="No Laborados" value={c.diasNoLab+" dias"} color={c.diasNoLab>3?"#e74c3c":"#f39c12"}/>}
+        {c.diasFallidos>0&&<KC label="Marc. Fallidas" value={c.diasFallidos+" dias"} color="#e67e22"/>}
+        <KC label="Consistencia" value={c.consist.label} color={c.consist.cl}/></div>
+      {/* Audit efficiency panel */}
+      <div style={{...crd,borderLeft:`4px solid ${CL.pri}`,background:CL.priLt}}>
+        <div style={{fontSize:12,fontWeight:700,color:CL.priDk,marginBottom:6}}>📋 Eficiencia Detallada</div>
+        <div style={{background:`linear-gradient(135deg,${CL.priDk},${CL.pri})`,color:"#fff",borderRadius:10,padding:"12px 16px",marginBottom:10,fontSize:13,lineHeight:1.8}}>
+          {c.totalHrsMar>0?<>🏷️ <b style={{fontSize:18}}>{fN(c.rHMar)}</b> reg/h marcada | <b>{fN(c.fHMar)}</b> fact/h marcada | <b>{c.diasMarValid>0?(c.totalHrsMar/c.diasMarValid).toFixed(1):0}h</b> marc/dia
+          <br/>⚡ Registra <b style={{fontSize:16}}>{c.totalHrsMar>0?Math.round(c.tR/(c.totalHrsMar*60)):0}</b> productos/min (hrs marcadas) | <b>{c.hrsEfec>0?Math.round(c.tR/(c.hrsEfec*60)):0}</b> productos/min (hrs efectivas)
+          <br/>📦 <b>{c.numDias>0?Math.round(c.tR/c.numDias):0}</b> reg/dia en <b>{c.numDias>0?Math.round(c.tF/c.numDias):0}</b> fact | Dias reg: <b>{c.numDias}</b> | Dias mar: <b>{c.diasMarValid}</b></>
+          :<>⚡ Registra <b style={{fontSize:18}}>{c.hrsEfec>0?Math.round(c.tR/(c.hrsEfec*60)):0}</b> productos/min
+          <br/>📦 <b>{c.numDias>0?Math.round(c.tR/c.numDias):0}</b> reg/dia en <b>{c.numDias>0?Math.round(c.tF/c.numDias):0}</b> fact | Trabaja <b>{c.numDias>0?(c.hrsEfec/c.numDias).toFixed(1):0}h</b>/dia</>}
+        </div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <div style={{flex:1,minWidth:140,background:"#fff",borderRadius:10,padding:"10px 12px"}}>
+            <div style={{fontSize:10,color:CL.txtL,fontWeight:700,marginBottom:6}}>⏱️ JORNADA</div>
+            <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+              <div style={{textAlign:"center",minWidth:60}}><div style={{fontSize:17,fontWeight:900,color:CL.pri}}>{c.numDias>0?(c.hrsEfec/c.numDias).toFixed(1):0}h</div><div style={{color:CL.txtL,fontSize:9}}>Prom Hrs/Dia</div></div>
+              <div style={{textAlign:"center",minWidth:60}}><div style={{fontSize:17,fontWeight:900,color:"#2ecc71"}}>{fH(c.hrsEfec)}</div><div style={{color:CL.txtL,fontSize:9}}>Total Mes</div></div>
+              <div style={{textAlign:"center",minWidth:60}}><div style={{fontSize:17,fontWeight:900,color:"#e67e22"}}>{(c.hrsEfec/8).toFixed(1)}</div><div style={{color:CL.txtL,fontSize:9}}>Equiv Dias 8h</div></div></div></div>
+          <div style={{flex:1,minWidth:140,background:"#fff",borderRadius:10,padding:"10px 12px"}}>
+            <div style={{fontSize:10,color:CL.txtL,fontWeight:700,marginBottom:6}}>⚡ VELOCIDAD</div>
+            <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+              <div style={{textAlign:"center",minWidth:60}}><div style={{fontSize:17,fontWeight:900,color:"#9b59b6"}}>{c.hrsEfec>0?Math.round(c.tR/(c.hrsEfec*60)):0}</div><div style={{color:CL.txtL,fontSize:9}}>Reg/Min</div></div>
+              <div style={{textAlign:"center",minWidth:60}}><div style={{fontSize:17,fontWeight:900,color:"#3498db"}}>{c.hrsEfec>0?(c.tF/(c.hrsEfec*60)).toFixed(1):0}</div><div style={{color:CL.txtL,fontSize:9}}>Fact/Min</div></div>
+              <div style={{textAlign:"center",minWidth:60}}><div style={{fontSize:17,fontWeight:900,color:CL.dan}}>{c.numDias>0?Math.round(c.tR/c.numDias):0}</div><div style={{color:CL.txtL,fontSize:9}}>Reg/Dia</div></div>
+              <div style={{textAlign:"center",minWidth:60}}><div style={{fontSize:17,fontWeight:900,color:CL.pri}}>{c.numDias>0?Math.round(c.tF/c.numDias):0}</div><div style={{color:CL.txtL,fontSize:9}}>Fact/Dia</div></div></div></div>
+          <div style={{flex:1,minWidth:140,background:"#fff",borderRadius:10,padding:"10px 12px"}}>
+            <div style={{fontSize:10,color:CL.txtL,fontWeight:700,marginBottom:6}}>🕐 TIEMPO ENTRE</div>
+            <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+              <div style={{textAlign:"center",minWidth:60}}><div style={{fontSize:17,fontWeight:900,color:"#9b59b6"}}>{c.tR>0?((c.hrsEfec*60)/c.tR).toFixed(1):0} min</div><div style={{color:CL.txtL,fontSize:9}}>por Registro</div></div>
+              <div style={{textAlign:"center",minWidth:60}}><div style={{fontSize:17,fontWeight:900,color:"#3498db"}}>{c.tF>0?((c.hrsEfec*60)/c.tF).toFixed(1):0} min</div><div style={{color:CL.txtL,fontSize:9}}>por Factura</div></div></div></div></div></div>
+      {c.mD&&<div className="desk-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <div style={{...crd,borderLeft:"4px solid #2ecc71"}}><div style={{fontSize:11,color:CL.txtL,fontWeight:600}}>🏆 Mejor</div><div style={{fontSize:16,fontWeight:800,color:CL.pri}}>{c.mD.fechaF} ({c.mD.diaSemL})</div><div style={{fontSize:12}}>{fN(c.mD.fH)} f/h - {c.mD.facs} fact</div></div>
+        <div style={{...crd,borderLeft:"4px solid #e74c3c"}}><div style={{fontSize:11,color:CL.txtL,fontWeight:600}}>📉 Peor</div><div style={{fontSize:16,fontWeight:800,color:CL.dan}}>{c.pDy.fechaF} ({c.pDy.diaSemL})</div><div style={{fontSize:12}}>{fN(c.pDy.fH)} f/h - {c.pDy.facs} fact</div></div></div>}
+      <div className="desk-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <div style={crd}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700}}>📈 F/H</h3><ResponsiveContainer width="100%" height={170}><ComposedChart data={c.dias}><CartesianGrid strokeDasharray="3 3" stroke="#eee"/><XAxis dataKey="fechaD" tick={{fontSize:9}}/><YAxis tick={{fontSize:9}}/><Tooltip/><Area type="monotone" dataKey="fH" fill={`${CL.pri}20`} stroke="none"/><Line type="monotone" dataKey="fH" stroke={CL.pri} strokeWidth={2.5} dot={{r:3,fill:CL.pri}} name="F/H"/></ComposedChart></ResponsiveContainer></div>
+        <div style={crd}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700}}>📦 R/H</h3><ResponsiveContainer width="100%" height={170}><ComposedChart data={c.dias}><CartesianGrid strokeDasharray="3 3" stroke="#eee"/><XAxis dataKey="fechaD" tick={{fontSize:9}}/><YAxis tick={{fontSize:9}}/><Tooltip/><Area type="monotone" dataKey="rH" fill="#3498db20" stroke="none"/><Line type="monotone" dataKey="rH" stroke="#3498db" strokeWidth={2.5} dot={{r:3}} name="R/H"/></ComposedChart></ResponsiveContainer></div></div>
+      <div style={crd}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700}}>⏰ Por Hora</h3><ResponsiveContainer width="100%" height={150}><BarChart data={c.hA.slice().sort((a,b)=>a.hora-b.hora)}><CartesianGrid strokeDasharray="3 3" stroke="#eee"/><XAxis dataKey="horaStr" tick={{fontSize:9}}/><YAxis tick={{fontSize:9}}/><Tooltip/><Bar dataKey="prom" name="Prom Reg/Dia" fill={CL.pri} radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div>
+      <div style={crd}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700}}>📅 Detalle Diario</h3><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["Fecha","Dia","Reg","Fact","Ini","Fin","HrsEfec",...(data.hasSched?["HrsMar","Dif","R/HMar"]:[]),"F/HEfec","Min/Fact","Min/Reg"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead><tbody>
+        {c.dias.map(d=>{const mf=d.facs>0?((d.hrs*60)/d.facs).toFixed(1):"—";const mr=d.regs>0?((d.hrs*60)/d.regs).toFixed(1):"—";const dif=d.hrsMar!=null?(d.hrsMar-d.hrs).toFixed(1):null;return <tr key={d.fecha} style={{background:d.hasFallido?"#fff3e0":"transparent"}}><td style={{...TD,fontWeight:600}}>{d.fechaD}</td><td style={{...TD,fontSize:11}}>{d.diaSem}</td><td style={TD}>{d.regs}</td><td style={TD}>{d.facs}</td><td style={{...TD,fontSize:11}}>{d.hi}</td><td style={{...TD,fontSize:11}}>{d.hf}</td><td style={TD}>{fH(d.hrs)}{d.minH?" ⚠️":""}</td>
+          {data.hasSched&&<><td style={{...TD,fontSize:11,color:"#8e44ad",fontWeight:600}}>{d.hrsMar!=null?fH(d.hrsMar):"—"}{d.hasFallido&&<span style={{color:"#e67e22",fontSize:9}}> ⚠F</span>}</td>
+          <td style={{...TD,fontSize:11,color:dif>0?"#2ecc71":"#e74c3c"}}>{dif!=null?(dif>0?"+":"")+dif+"h":"—"}</td>
+          <td style={{...TD,fontWeight:700,color:CL.pri}}>{d.rHMar!=null?fN(d.rHMar):"—"}</td></>}
+          <td style={{...TD,color:d.fH>=data.avg?CL.pri:CL.dan}}>{fN(d.fH)}</td><td style={{...TD,fontSize:11,color:"#3498db"}}>{mf}</td><td style={{...TD,fontSize:11,color:"#9b59b6"}}>{mr}</td></tr>})}</tbody></table></div></div>
+    </>:<div style={{...crd,textAlign:"center",padding:46,color:CL.txtL}}><div style={{fontSize:42,marginBottom:8}}>👤</div><p>Selecciona un cajero</p></div>}</div>;}
+
+/* ═══ COMPARE ═══ */
+function Cmp({data}){const[s1,sS1]=useState(""),[s2,sS2]=useState("");const c1=data.cajeros.find(x=>x.nombre===s1),c2=data.cajeros.find(x=>x.nombre===s2);
+  const mt=c1&&c2?[{l:"Ranking",a:`#${c1.rank}`,b:`#${c2.rank}`,w:c1.rank<c2.rank?1:c2.rank<c1.rank?2:0},{l:"F/H",a:fN(c1.pfH),b:fN(c2.pfH),w:c1.pfH>c2.pfH?1:2,key:1},{l:"R/H",a:fN(c1.prH),b:fN(c2.prH),w:c1.prH>c2.prH?1:2},{l:"Consist.",a:c1.consist.label,b:c2.consist.label,w:c1.consist.cv<c2.consist.cv?1:2},{l:"KPI",a:`${c1.kpi.ic} ${c1.kpi.lab}`,b:`${c2.kpi.ic} ${c2.kpi.lab}`,w:0}]:[];
+  const dts=c1&&c2?[...new Set([...c1.dias.map(x=>x.fecha),...c2.dias.map(x=>x.fecha)])].sort():[];
+  const cd=dts.map(f=>{const d1=c1.dias.find(x=>x.fecha===f),d2=c2.dias.find(x=>x.fecha===f);const o={f:fD(new Date(f+"T12:00:00"))};o[sN(c1.nombre)]=d1?+d1.fH.toFixed(2):null;o[sN(c2.nombre)]=d2?+d2.fH.toFixed(2):null;return o;});
+  return <div style={{display:"flex",flexDirection:"column",gap:14}}>
+    <div style={{...crd,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}><select style={SL} value={s1} onChange={e=>sS1(e.target.value)}><option value="">-- Cajero 1 --</option>{data.cajeros.map(c=><option key={c.nombre} value={c.nombre}>#{c.rank} {c.nombre}{rBadge(c)}</option>)}</select><span style={{fontSize:20,fontWeight:800,color:CL.pri}}>VS</span>
+      <select style={SL} value={s2} onChange={e=>sS2(e.target.value)}><option value="">-- Cajero 2 --</option>{data.cajeros.map(c=><option key={c.nombre} value={c.nombre}>#{c.rank} {c.nombre}{rBadge(c)}</option>)}</select>{c1&&c2&&<Btn green onClick={()=>exCmp(c1,c2)}>📥 Excel</Btn>}</div>
+    {c1&&c2?<><div style={crd}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr><th style={{...TH,textAlign:"right",width:"35%"}}>{sN(c1.nombre)}</th><th style={{...TH,textAlign:"center",width:"30%"}}>Metrica</th><th style={{...TH,width:"35%"}}>{sN(c2.nombre)}</th></tr></thead>
+      <tbody>{mt.map(m=><tr key={m.l} style={{background:m.key?CL.priLt:"transparent"}}><td style={{...TD,textAlign:"right",fontWeight:m.key?800:600,color:m.w===1?CL.pri:m.w===2?CL.dan:CL.txt,fontSize:m.key?16:13}}>{m.w===1?"✓ ":""}{m.a}</td><td style={{...TD,textAlign:"center",fontSize:11,color:CL.txtL,fontWeight:700}}>{m.l}</td><td style={{...TD,fontWeight:m.key?800:600,color:m.w===2?CL.pri:m.w===1?CL.dan:CL.txt,fontSize:m.key?16:13}}>{m.b}{m.w===2?" ✓":""}</td></tr>)}</tbody></table></div>
+      <div style={crd}><h3 style={{margin:"0 0 8px",fontSize:14,fontWeight:700}}>📈 F/H</h3><ResponsiveContainer width="100%" height={200}><LineChart data={cd}><CartesianGrid strokeDasharray="3 3" stroke="#eee"/><XAxis dataKey="f" tick={{fontSize:10}}/><YAxis tick={{fontSize:10}}/><Tooltip/><Legend/><Line type="monotone" dataKey={sN(c1.nombre)} stroke={CL.pri} strokeWidth={2.5} dot={{r:3}} connectNulls/><Line type="monotone" dataKey={sN(c2.nombre)} stroke="#e74c3c" strokeWidth={2.5} dot={{r:3}} connectNulls/></LineChart></ResponsiveContainer></div>
+    </>:<div style={{...crd,textAlign:"center",padding:46,color:CL.txtL}}><div style={{fontSize:42}}>⚔️</div><p>Selecciona dos cajeros</p></div>}</div>;}
+
+/* ═══ ALERTS ═══ */
+function Alt({data}){const no=data.cajeros.filter(c=>c.kpi.lab==="No cumple"),at=data.cajeros.filter(c=>c.kpi.lab==="En promedio");const kt=kpiT(data);
+  // Smart alerts: detect patterns
+  const patterns=useMemo(()=>{const al=[];const dias=["Dom","Lun","Mar","Mie","Jue","Vie","Sab"];
+    data.cajeros.forEach(c=>{if(c.dias.length<3)return;
+      // Day-of-week pattern: best and worst day
+      const byDay={};c.dias.forEach(d=>{const dw=new Date(d.fecha+"T12:00:00").getDay();if(!byDay[dw])byDay[dw]=[];byDay[dw].push(d.fH);});
+      const dayAvgs=Object.entries(byDay).map(([d,v])=>({d:+d,avg:v.reduce((a,b)=>a+b,0)/v.length,n:v.length})).filter(x=>x.n>=2);
+      if(dayAvgs.length>=2){const best=dayAvgs.reduce((a,b)=>a.avg>b.avg?a:b),worst=dayAvgs.reduce((a,b)=>a.avg<b.avg?a:b);
+        if(best.avg-worst.avg>3)al.push({cajero:c.nombre,tipo:"📅",msg:`Rinde ${fN(best.avg)} f/h los ${dias[best.d]} pero baja a ${fN(worst.avg)} los ${dias[worst.d]}`,sev:2});}
+      // Declining trend: last 3 days dropping
+      if(c.dias.length>=4){const last4=c.dias.slice(-4);if(last4[3].fH<last4[2].fH&&last4[2].fH<last4[1].fH&&last4[1].fH<last4[0].fH)
+        al.push({cajero:c.nombre,tipo:"📉",msg:`En caida: ${last4.map(d=>fN(d.fH)).join(" → ")} (ultimos 4 dias)`,sev:3});}
+      // Outlier day: one day way below their own average
+      const myAvg=c.pfH;c.dias.forEach(d=>{if(d.fH<myAvg*OUTLIER_THRESHOLD&&myAvg>5)al.push({cajero:c.nombre,tipo:"⚡",msg:`Dia atipico ${d.fechaF}: solo ${fN(d.fH)} f/h (su prom es ${fN(myAvg)})`,sev:1});});
+      // High variability warning
+      if(c.consist.cv>50)al.push({cajero:c.nombre,tipo:"🎲",msg:`Muy variable (CV ${c.consist.cv.toFixed(0)}%): rendimiento impredecible`,sev:2});
+    });return al.sort((a,b)=>b.sev-a.sev);},[data]);
+  return <div style={{display:"flex",flexDirection:"column",gap:14}}><KPIBanner data={data}/>
+    <div style={{...crd,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,background:no.length>0?"#fde8e8":"#e6f9ee"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:24}}>{no.length>0?"🚨":"✅"}</span><div><div style={{fontSize:16,fontWeight:700}}>{no.length>0?`${no.length} NO cumplen`:"Todos OK!"}</div><div style={{fontSize:12,color:CL.txtL}}>Cumple ≥ {fN(kt.cumple)} | En prom ≥ {fN(kt.enProm)}</div></div></div>
+      <Btn green onClick={()=>exAlt(data)}>📥 Excel</Btn></div>
+    {patterns.length>0&&<div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700,color:"#8e44ad"}}>🔔 Alertas Inteligentes</h3>
+      <p style={{fontSize:11,color:CL.txtL,marginBottom:8}}>Patrones detectados automaticamente en los datos</p>
+      {patterns.map((p,i)=><div key={i} style={{display:"flex",gap:10,padding:"8px 12px",marginBottom:4,background:p.sev>=3?"#fde8e8":p.sev>=2?"#fff9e6":"#f0f6ff",borderRadius:8,borderLeft:`3px solid ${p.sev>=3?"#e74c3c":p.sev>=2?"#f39c12":"#3498db"}`,alignItems:"center"}}>
+        <span style={{fontSize:18}}>{p.tipo}</span>
+        <div style={{flex:1}}><div style={{fontSize:12,fontWeight:700}}>{sN(p.cajero)}</div><div style={{fontSize:11,color:CL.txtL}}>{p.msg}</div></div>
+        <Bg color={p.sev>=3?"#e74c3c":p.sev>=2?"#f39c12":"#3498db"}>{p.sev>=3?"Critico":p.sev>=2?"Atencion":"Info"}</Bg></div>)}
+      {patterns.length===0&&<p style={{fontSize:12,color:CL.txtL}}>No se detectaron patrones inusuales.</p>}</div>}
+    {no.length>0&&<div style={crd}><h3 style={{margin:"0 0 8px",fontSize:14,fontWeight:700,color:CL.dan}}>❌ No Cumplen</h3><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["#","Cajero","F/H","Consist","vs Prom"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead><tbody>{no.map(c=><tr key={c.nombre} style={{background:"#fde8e8"}}><td style={{...TD,fontWeight:800,color:CL.dan}}>{c.rank}</td><td style={{...TD,fontWeight:600}}>{c.nombre}{rBadge(c)}</td><td style={{...TD,fontWeight:700,color:CL.dan}}>{fN(c.pfH)}</td><td style={TD}><Bg color={c.consist.cl}>{c.consist.label}</Bg></td><td style={{...TD,color:CL.dan}}>{fN(c.pfH-data.avg)}</td></tr>)}</tbody></table></div></div>}
+    {at.length>0&&<div style={crd}><h3 style={{margin:"0 0 8px",fontSize:14,fontWeight:700,color:CL.warn}}>😐 En Promedio</h3><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["#","Cajero","F/H","Falta"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead><tbody>{at.map(c=><tr key={c.nombre} style={{background:"#fff9e6"}}><td style={{...TD,fontWeight:800,color:CL.warn}}>{c.rank}</td><td style={{...TD,fontWeight:600}}>{c.nombre}{rBadge(c)}</td><td style={{...TD,fontWeight:700}}>{fN(c.pfH)}</td><td style={{...TD,color:CL.warn}}>+{fN(kt.cumple-c.pfH)}</td></tr>)}</tbody></table></div></div>}</div>;}
+
+/* ═══ REPORTS ═══ */
+function Rpt({data,showR}){const[s,sS]=useState("");const c=data.cajeros.find(x=>x.nombre===s);const kt=kpiT(data);
+  const met=[{t:"📦 Registros",x:"Cada fila del archivo = 1 producto escaneado por cajero."},{t:"🧾 Facturas",x:"Valores UNICOS de Nro documento. 1 factura puede tener muchos productos."},{t:"📅 Dias",x:"Dias distintos con al menos 1 registro."},{t:"⏰ Horas Efectivas",x:"Ultimo registro - Primer registro por dia. Minimo 1h. Se suman todos los dias."},{t:"📅 Horas Horario",x:"Del archivo de horarios subido (opcional). Horas programadas/asignadas."},{t:"📊 Aprovechamiento",x:"= Horas Efectivas / Horas Horario x 100. Solo si se sube archivo de horarios."},{t:"⚡ Fact/Hora (PRINCIPAL)",x:"= Total Facturas / Total Horas Efectivas. Es el indicador clave."},{t:"📦 Reg/Hora",x:"= Total Registros / Total Horas Efectivas."},{t:"📦 Reg/Factura",x:"= Total Registros / Total Facturas. Productos promedio por factura."},{t:"🏆 Ranking",x:"Ordenamiento de mayor a menor por Fact/Hora."},{t:"🎯 Consistencia (CV%)",x:"Coeficiente de variacion de F/H diaria. Mide que tan estable es el cajero dia a dia. Muy estable (<=15%), Estable (<=30%), Variable (<=50%), Muy variable (>50%)."},{t:`📏 Prom Sede: ${fN(data.avg)}`,x:"= Suma de F/H de cada cajero / Total cajeros."},{t:`✅ Cumple: >= ${fN(kt.cumple)}`,x:kt.custom?"KPI personalizado definido por el evaluador.":"F/H >= Promedio + 2 (calculado automaticamente)."},{t:`😐 En promedio: >= ${fN(kt.enProm)}`,x:kt.custom?"KPI personalizado definido por el evaluador.":`F/H >= ${fN(kt.enProm)} pero menor que ${fN(kt.cumple)}.`},{t:`❌ No Cumple: < ${fN(kt.enProm)}`,x:kt.custom?"KPI personalizado definido por el evaluador.":`F/H por debajo de ${fN(kt.enProm)}.`},{t:"💾 Archivo de Memoria (.json)",x:"Guarda una 'foto' del analisis actual. Se puede cargar despues en Periodos para comparar con un nuevo analisis o comparar entre sedes."},{t:"⚠️ Marcacion Fallida",x:"Dias donde el empleado marco el reloj pero la marcacion salio fallida. La app usa la hora igualmente y deduce si fue entrada, salida o break por su posicion en el dia."}];
+  return <div style={{display:"flex",flexDirection:"column",gap:14}}>
+    <div style={crd}><h3 style={{margin:"0 0 8px",fontSize:15,fontWeight:700}}>📊 Informe General</h3><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><Btn onClick={()=>showR({html:narGen(data),title:`General - ${data.sede}`})}>📄 Ver</Btn><Btn green onClick={()=>exAll(data)}>📥 Excel</Btn></div></div>
+    <div style={crd}><h3 style={{margin:"0 0 8px",fontSize:15,fontWeight:700}}>👤 Individual</h3><div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}><select style={SL} value={s} onChange={e=>sS(e.target.value)}><option value="">-- Seleccionar --</option>{data.cajeros.map(c=><option key={c.nombre} value={c.nombre}>#{c.rank} {c.nombre}{rBadge(c)}</option>)}</select>
+      {c&&<Btn onClick={()=>showR({html:narInd(c,data),title:`Informe - ${c.nombre}`})}>📄 Ver</Btn>}{c&&<Btn green onClick={()=>exInd(c,data)}>📥 Excel</Btn>}</div></div>
+    <div style={{...crd,background:"#f0faf4",border:`1px solid ${CL.pri}40`}}><h3 style={{margin:"0 0 8px",fontSize:15,fontWeight:700,color:CL.pri}}>📦 Descargar TODOS los Informes</h3>
+      <p style={{fontSize:13,color:CL.txtL,marginBottom:10}}>Genera un archivo con los {data.cajeros.length} informes narrativos.</p>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><Btn onClick={()=>dlReport(narAllInd(data),`Todos_Informes_${data.sede}`)}>📥 Todos ({data.cajeros.length})</Btn><Btn green onClick={()=>dlReport(narGen(data),`General_${data.sede}`)}>📥 General</Btn></div></div>
+    <div style={crd}><h3 style={{margin:"0 0 8px",fontSize:15,fontWeight:700}}>🚨 Alertas</h3><Btn green onClick={()=>exAlt(data)}>📥 Excel Alertas</Btn></div>
+    <div style={{...crd,border:"2px solid #3498db40",background:"#f0f6ff"}}><h3 style={{margin:"0 0 12px",fontSize:16,fontWeight:800,color:"#2c3e50"}}>📖 Manual de Metodologia</h3>
+      <p style={{fontSize:13,color:CL.txtL,margin:"0 0 14px"}}>Asi se calculan todos los indicadores de este sistema. Importante para que cualquier persona entienda las reglas del juego.</p>
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {met.map((m,i)=><div key={i} style={{display:"flex",gap:10,padding:"8px 12px",background:i%2===0?"#fff":"#f8fafc",borderRadius:8,border:"1px solid #e8ecf0"}}>
+          <div style={{fontWeight:700,fontSize:13,minWidth:200,color:"#2c3e50"}}>{m.t}</div>
+          <div style={{fontSize:12,color:CL.txtL,flex:1}}>{m.x}</div></div>)}
+      </div>
+      <div style={{marginTop:14,padding:"10px 14px",background:"#e8f4fd",borderRadius:8,fontSize:12,color:"#2c3e50",border:"1px solid #b8daff"}}>
+        💡 <b>Nota:</b> Los KPIs pueden ser automaticos (basados en promedio) o personalizados (definidos en ⚙️). El archivo de horarios es opcional y agrega metricas de aprovechamiento y asistencia. El archivo de memoria (.json) permite comparar periodos y sedes sin perder datos.
+      </div></div></div>;}
+
+/* ═══ SNAPSHOT SAVE/LOAD (MEMORY) ═══ */
+function saveSnapshot(data){
+  const snap={_type:"audit_snapshot",_v:5,sede:data.sede,periodo:data.periodo,avg:data.avg,avgR:data.avgR,avgRHMar:data.avgRHMar||0,kpiCfg:data.kpiCfg,tpvStats:data.tpvStats||[],
+    cajeros:data.cajeros.map(c=>({nombre:c.nombre,cedula:c.cedula,sede:c.sede,tF:c.tF,tR:c.tR,numDias:c.numDias,hrsEfec:c.hrsEfec,hrsHor:c.hrsHor,totalHrsMar:c.totalHrsMar||0,diasMarValid:c.diasMarValid||0,diasProg:c.diasProg,diasNoLab:c.diasNoLab,diasFallidos:c.diasFallidos||0,activo:c.activo,cargo:c.cargo||"",ccosto:c.ccosto||"",pfH:c.pfH,prH:c.prH,prF:c.prF,rHMar:c.rHMar||0,fHMar:c.fHMar||0,rank:c.rank,consist:{cv:c.consist.cv,label:c.consist.label},kpiLab:c.kpi.lab,
+      hA:c.hA||[],dA:c.dA||[],
+      dias:c.dias.map(d=>({fecha:d.fecha,fechaD:d.fechaD,fechaF:d.fechaF,diaSem:d.diaSem,diaSemL:d.diaSemL,facs:d.facs,regs:d.regs,hrs:d.hrs,fH:d.fH,rH:d.rH,rF:d.rF,minH:d.minH||false,hi:d.hi,hf:d.hf,hrsMar:d.hrsMar!=null?d.hrsMar:null,hasFallido:d.hasFallido||false,breakMin:d.breakMin||0,rHMar:d.rHMar||null,fHMar:d.fHMar||null}))}))};
+  const blob=new Blob([JSON.stringify(snap)],{type:"application/json"});const url=URL.createObjectURL(blob);const a=document.createElement("a");
+  a.href=url;a.download=`Auditoria_${data.sede.replace(/\s/g,"_")}_${data.periodo.desde}_a_${data.periodo.hasta}.json`;
+  document.body.appendChild(a);a.click();setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url);},300);toast("✅ Memoria guardada");}
+
+const SNAP_VERSION=5;
+function migrateSnapshot(s){
+  if(!s._v||s._v<2){s.cajeros.forEach(c=>{c.diasFallidos=c.diasFallidos||0;c.consist=c.consist||{cv:0,label:"N/A"};});}
+  if(!s._v||s._v<3){s.avgR=s.avgR||0;s.cajeros.forEach(c=>{c.prF=c.prF||0;});}
+  if(!s._v||s._v<4){s.tpvStats=s.tpvStats||[];s.cajeros.forEach(c=>{c.activo=c.activo!=null?c.activo:null;c.cargo=c.cargo||"";c.hA=c.hA||[];c.dA=c.dA||[];c.dias.forEach(d=>{d.minH=d.minH||false;});});}
+  if(!s._v||s._v<5){s.avgRHMar=s.avgRHMar||0;s.cajeros.forEach(c=>{c.totalHrsMar=c.totalHrsMar||0;c.diasMarValid=c.diasMarValid||0;c.rHMar=c.rHMar||0;c.fHMar=c.fHMar||0;c.dias.forEach(d=>{d.hrsMar=d.hrsMar!=null?d.hrsMar:null;d.hasFallido=d.hasFallido||false;d.breakMin=d.breakMin||0;d.rHMar=d.rHMar||null;d.fHMar=d.fHMar||null;});});}
+  s._v=SNAP_VERSION;return s;
 }
 
-/* === PARAMETROS DE POLITICAS (DEFAULTS EDITABLES) === */
-/* === PARAMETROS DE POLITICAS (DEFAULTS EDITABLES) === */
-const PARAMS_DEFAULT = {
-  jornadaNormal: 7,           // Horas de jornada normal
-  jornadaMaxDia: 9,           // Max horas que puede trabajar en un dia (pol 3)
-  jornadaExtendidaHoras: 10,  // Umbral para jornada extendida sin descanso (pol 1)
-  breakMinimoMin: 8,          // Break minimo en minutos para detectar simulacion (pol 2)
-  /* === RANGOS DE BREAKS VALIDOS (pol 5) === */
-  break15Target: 15,          // Break corto: target 15 min
-  break15Tolerancia: 2,       // Tolerancia +-2 -> rango 13-17
-  break30Target: 30,          // Break largo: target 30 min
-  break30Tolerancia: 2,       // Tolerancia +-2 -> rango 28-32
-  separacionMinHoras: 2,      // Separacion minima entre 2 breaks (horas de trabajo)
-  /* === LEGACY: se mantienen por retrocompatibilidad pero no se usan en pol 5 === */
-  breakNormalMax: 15,
-  breakTolerancia: 3,
-  breakMaxPermitido: 45,      // Sigue siendo el umbral para distinguir break vs turno partido
-  turnoPartidoLegalMin: 170,  // Min para TP legal: 2h50m = 170min
-  turnoPartidoMaxSemana: 2,   // Max turnos partidos por semana (pol 4)
-  turnoPartidoAplicaCargos: "",
-  cargosSupervisor: "SUPERVISOR,COORDINADOR,ADMINISTRADOR",
-  domingoMinDescansoBase: 1,  // Min domingos libres/mes para personal base (pol 6, antes pol 7)
-  horasExtraMaxDia: 2,        // Max HE por dia (pol 8, antes pol 9)
-  horasExtraMaxSemana: 12,    // Max HE por semana (pol 7, antes pol 8)
-};
+function loadSnapshot(json){
+  const s=json;if(!s._type||s._type!=="audit_snapshot")return null;
+  migrateSnapshot(s);
+  const cajeros=s.cajeros.map(c=>({...c,consist:c.consist||{cv:0,label:"N/A",cl:"#95a5a6"},frase:getPhrase(c.rank,s.cajeros.length),kpi:getKPI(c.pfH,s.avg,s.kpiCfg),
+    mD:c.dias.length>0?c.dias.reduce((a,b)=>a.fH>b.fH?a:b):null,pDy:c.dias.length>0?c.dias.reduce((a,b)=>a.fH<b.fH?a:b):null,hA:c.hA||[],dA:c.dA||[]}));
+  cajeros.forEach(c=>{c.consist.cl=c.consist.cv<=15?"#2ecc71":c.consist.cv<=30?"#3498db":c.consist.cv<=50?"#f39c12":"#e74c3c";});
+  const allDates=[...new Set(cajeros.flatMap(c=>c.dias.map(d=>d.fecha)))].sort();
+  const dS=allDates.map(dk=>{let f=0,r=0,h=0,a=0;cajeros.forEach(c=>{const d=c.dias.find(x=>x.fecha===dk);if(d){f+=d.facs;r+=d.regs;h+=d.hrs;a++;}});return{fecha:dk,fechaD:fD(new Date(dk+"T12:00:00")),facs:f,regs:r,hrs:h,activos:a,fH:h>0?f/h:0};});
+  return{cajeros,sede:s.sede,avg:s.avg,avgR:s.avgR,avgRHMar:s.avgRHMar||0,hasSched:cajeros.some(c=>c.hrsHor!==null||c.totalHrsMar>0),tR:cajeros.reduce((a,c)=>a+c.tR,0),tF:cajeros.reduce((a,c)=>a+c.tF,0),periodo:s.periodo,dS,allDates,kpiCfg:s.kpiCfg||null,tpvStats:s.tpvStats||[]};}
 
-/* === DEFINICION DE LAS 9 POLITICAS === */
-const POLITICAS_DEF = [
-  { id: "JEX", num: 1, nombre: "Jornadas Extendidas sin Descanso", icono: "!",
-    descFn: function(p) { return "Jornada mayor a " + p.jornadaExtendidaHoras + "h con break menor a " + p.breakMinimoMin + "min"; } },
-  { id: "BRK", num: 2, nombre: "Break Simulado (Menor al Minimo)", icono: "*",
-    descFn: function(p) { return "Cualquier break con duracion menor a " + p.breakMinimoMin + " min (simulacion de break)"; } },
-  { id: "JXC", num: 3, nombre: "Jornadas Excesivas", icono: "#",
-    descFn: function(p) { return "Jornada normal " + p.jornadaNormal + "h, max permitido " + p.jornadaMaxDia + "h/dia"; } },
-  { id: "TPE", num: 4, nombre: "Turnos Partidos Excesivos", icono: "%",
-    descFn: function(p) {
-      const r15a = p.break15Target - p.break15Tolerancia;
-      const r15b = p.break15Target + p.break15Tolerancia;
-      return "Max " + p.turnoPartidoMaxSemana + "/semana. Legal min " + p.turnoPartidoLegalMin + "min, Ilegal menor (excluye breaks de " + r15a + "-" + r15b + ")";
-    } },
-  { id: "EBR", num: 5, nombre: "Break Fuera de Rango", icono: "+",
-    descFn: function(p) {
-      const r15a = p.break15Target - p.break15Tolerancia;
-      const r15b = p.break15Target + p.break15Tolerancia;
-      const r30a = p.break30Target - p.break30Tolerancia;
-      const r30b = p.break30Target + p.break30Tolerancia;
-      return "Break debe estar en " + r15a + "-" + r15b + "min (15) o " + r30a + "-" + r30b + "min (30). Si toma 2, separacion min " + p.separacionMinHoras + "h";
-    } },
-  { id: "DBA", num: 6, nombre: "Domingos Personal de Base", icono: "B",
-    descFn: function(p) { return "Equilibrio: min " + p.domingoMinDescansoBase + " domingo(s) libre(s)/mes"; } },
-  { id: "HES", num: 7, nombre: "HE Semanal (Max por Semana)", icono: "S",
-    descFn: function(p) { return "Max " + p.horasExtraMaxSemana + "h extra acumuladas por semana"; } },
-  { id: "HED", num: 8, nombre: "HE Diaria (Max por Dia)", icono: "H",
-    descFn: function(p) { return "Max " + p.horasExtraMaxDia + "h extra por dia (jornada normal " + p.jornadaNormal + "h)"; } },
-  { id: "BMA", num: 9, nombre: "Buena Marcacion", icono: "M",
-    descFn: function(p) { return "Marcacion completa: par y minimo 4 marcaciones (con break). Filtra dias mal marcados de las demas politicas."; } },
-];
+/* ═══ PERIOD / SEDE COMPARE ═══ */
+function PComp({data}){const r2=useRef();const[d2,setD2]=useState(null);const[st,setSt]=useState("");const[mode,setMode]=useState(null);
+  const load2=useCallback(async f=>{setSt("Cargando...");try{
+    const buf=await f.arrayBuffer();const nm=f.name.toLowerCase();let d;
+    if(nm.endsWith(".json")){const txt=new TextDecoder().decode(buf);const json=JSON.parse(txt);d=loadSnapshot(json);if(!d){setSt("Error: no es un archivo de memoria valido.");return;}}
+    else{let j;if(nm.endsWith(".csv")){let txt;try{txt=new TextDecoder("utf-8",{fatal:true}).decode(buf);}catch(e){txt=new TextDecoder("latin1").decode(buf);}
+      j=[];let cur="",inQ=false;const pushRow=()=>{j.push(cur.split(",").map(c=>{c=c.trim();if(c.startsWith('"')&&c.endsWith('"'))c=c.slice(1,-1).replace(/""/g,'"');return c;}));cur="";};
+      for(const ch of txt){if(ch==='"')inQ=!inQ;else if(ch==="\n"&&!inQ){pushRow();}else{cur+=ch;}}if(cur.trim())pushRow();
+    }else{const wb=XLSX.read(buf,{type:"array",cellDates:false,raw:false});j=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true,defval:""});}d=processData(j,null);}
+    if(data.kpiCfg){d.kpiCfg=data.kpiCfg;d.cajeros.forEach(c=>{c.kpi=getKPI(c.pfH,d.avg,d.kpiCfg);});}
+    const same=d.sede.toUpperCase().trim()===data.sede.toUpperCase().trim();setMode(same?"periodo":"sede");setD2(d);
+    setSt(same?`📅 Misma sede detectada → Comparacion de periodos | ${d.cajeros.length} cajeros | ${d.periodo.desde} a ${d.periodo.hasta}`:`🏢 Sede diferente detectada: ${d.sede} → Comparacion entre sedes | ${d.cajeros.length} cajeros`);}catch(e){setSt("Error: "+e.message);}}, [data]);
 
-/* === EVALUACION DE POLITICAS === */
-function evaluarPoliticas(marcaciones, params, sedeFiltro) {
-  const datos = sedeFiltro && sedeFiltro !== "Todas"
-    ? marcaciones.filter((m) => m.DEPENDENCIA === sedeFiltro)
-    : marcaciones;
+  const comp=useMemo(()=>{if(!d2||mode!=="periodo")return null;
+    return data.cajeros.map(c=>{const c2=d2.cajeros.find(x=>x.nombre===c.nombre);if(!c2)return{...c,prev:null,dFH:null,dRk:null};return{...c,prev:c2,dFH:c.pfH-c2.pfH,dRk:c2.rank-c.rank};}).sort((a,b)=>(b.dFH||0)-(a.dFH||0));},[data,d2,mode]);
 
-  // Agrupar por empleado
-  const porEmpleado = {};
-  datos.forEach((m) => {
-    const id = m.IDENTIFICACION;
-    if (!porEmpleado[id]) {
-      porEmpleado[id] = {
-        id, nombre: m.EMPLEADO, cargo: m.CARGO || "",
-        sede: m.DEPENDENCIA, seccion: m.CENTROCOSTO, registros: [],
-      };
-    }
-    porEmpleado[id].registros.push(m);
-  });
+  return <div style={{display:"flex",flexDirection:"column",gap:14}}>
+    <div style={crd}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8,marginBottom:10}}>
+        <div><h3 style={{margin:"0 0 4px",fontSize:15,fontWeight:700}}>📈 Comparar Periodos / Sedes</h3>
+          <p style={{fontSize:12,color:CL.txtL,margin:0}}>Sube un archivo <b>.json</b> (guardado con 💾) o un <b>.xlsx</b> de otro periodo u otra sede. La app detecta automaticamente si es la misma sede o una diferente.</p></div>
+        <Btn green onClick={()=>saveSnapshot(data)}>💾 Guardar Memoria</Btn></div>
+      <p style={{fontSize:12,color:CL.txtL,marginBottom:8}}>📍 Actual: <b>{data.sede}</b> | {data.periodo.desde} a {data.periodo.hasta} | {data.cajeros.length} cajeros | Prom: {fN(data.avg)} f/h</p>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <button onClick={()=>r2.current?.click()} style={{padding:"10px 20px",borderRadius:10,border:`2px dashed ${d2?mode==="sede"?"#9b59b6":CL.pri:CL.pri}`,background:d2?mode==="sede"?"#f3e8ff":CL.priLt:"#fff",color:d2?mode==="sede"?"#9b59b6":CL.pri:CL.pri,fontSize:13,fontWeight:700,cursor:"pointer"}}>{d2?`✅ ${d2.sede} (${d2.cajeros.length} cajeros)`:"📁 Subir .json o .xlsx"}</button>
+        <input ref={r2} type="file" accept=".xlsx,.xls,.xlsm,.csv,.json" style={{display:"none"}} onChange={e=>{if(e.target.files[0])load2(e.target.files[0]);e.target.value="";}}/>
+        {d2&&<button onClick={()=>{setD2(null);setMode(null);setSt("");}} style={{padding:"6px 12px",borderRadius:8,border:"1px solid #e74c3c",background:"#fff",color:"#e74c3c",fontSize:11,cursor:"pointer",fontWeight:600}}>✕ Quitar</button>}
+      </div>
+      {st&&<p style={{fontSize:12,color:mode==="sede"?"#9b59b6":CL.pri,marginTop:8,fontWeight:600}}>{st}</p>}</div>
 
-  const empleados = Object.values(porEmpleado);
-  const totalEmpleados = empleados.length;
+    {/* PERIOD COMPARISON */}
+    {comp&&mode==="periodo"&&<><div style={crd}><h3 style={{margin:"0 0 4px",fontSize:14,fontWeight:700}}>📅 Evolucion: {d2.periodo.desde}/{d2.periodo.hasta} → {data.periodo.desde}/{data.periodo.hasta}</h3>
+      <p style={{fontSize:12,color:CL.txtL,margin:"0 0 10px"}}>Prom antes: <b>{fN(d2.avg)}</b> → Prom ahora: <b>{fN(data.avg)}</b> ({data.avg>d2.avg?`+${fN(data.avg-d2.avg)} ↑`:data.avg<d2.avg?`${fN(data.avg-d2.avg)} ↓`:"igual"})</p>
+      <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["#","Cajero","F/H Antes","F/H Ahora","Cambio","Rank Antes","Rank Ahora","Mov"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead>
+        <tbody>{comp.map(c=>{const up=c.dFH>0,dn=c.dFH<0;return <tr key={c.nombre} style={{background:c.prev?up?"#e6f9ee":dn?"#fde8e8":"#fff":"#f8f8f8"}}>
+          <td style={{...TD,fontWeight:800}}>{c.rank}</td><td style={{...TD,fontWeight:600,fontSize:11}}>{c.nombre}{rBadge(c)}</td>
+          <td style={TD}>{c.prev?fN(c.prev.pfH):"-"}</td><td style={{...TD,fontWeight:700}}>{fN(c.pfH)}</td>
+          <td style={{...TD,fontWeight:800,color:up?"#2ecc71":dn?"#e74c3c":"#666",fontSize:14}}>{c.dFH!==null?`${up?"+":""}${fN(c.dFH)}`:"-"}</td>
+          <td style={TD}>{c.prev?`#${c.prev.rank}`:"-"}</td><td style={TD}>#{c.rank}</td>
+          <td style={{...TD,fontWeight:700,fontSize:14,color:c.dRk>0?"#2ecc71":c.dRk<0?"#e74c3c":"#666"}}>{c.dRk!==null?c.dRk>0?`↑${c.dRk}`:c.dRk<0?`↓${Math.abs(c.dRk)}`:"=":"-"}</td></tr>})}</tbody></table></div></div>
+      <div className="desk-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+        <div style={{...crd,borderLeft:"4px solid #2ecc71"}}><h3 style={{margin:"0 0 8px",fontSize:14,fontWeight:700,color:"#2ecc71"}}>📈 Mas Mejoraron</h3>
+          {comp.filter(c=>c.dFH>0).slice(0,5).map(c=><div key={c.nombre} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:"1px solid #f0f2f1"}}><span style={{fontWeight:600}}>{sN(c.nombre)}{rBadge(c)}</span><span style={{fontWeight:800,color:"#2ecc71"}}>+{fN(c.dFH)}</span></div>)}
+          {comp.filter(c=>c.dFH>0).length===0&&<p style={{fontSize:12,color:CL.txtL}}>Ninguno mejoro</p>}</div>
+        <div style={{...crd,borderLeft:"4px solid #e74c3c"}}><h3 style={{margin:"0 0 8px",fontSize:14,fontWeight:700,color:"#e74c3c"}}>📉 Mas Bajaron</h3>
+          {comp.filter(c=>c.dFH!==null&&c.dFH<0).sort((a,b)=>a.dFH-b.dFH).slice(0,5).map(c=><div key={c.nombre} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:"1px solid #f0f2f1"}}><span style={{fontWeight:600}}>{sN(c.nombre)}{rBadge(c)}</span><span style={{fontWeight:800,color:"#e74c3c"}}>{fN(c.dFH)}</span></div>)}
+          {comp.filter(c=>c.dFH!==null&&c.dFH<0).length===0&&<p style={{fontSize:12,color:CL.txtL}}>Ninguno bajo</p>}</div></div>
+      {comp.filter(c=>!c.prev).length>0&&<div style={{...crd,borderLeft:"4px solid #f39c12"}}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700,color:CL.warn}}>🆕 Nuevos (no estaban en periodo anterior)</h3>
+        {comp.filter(c=>!c.prev).map(c=><span key={c.nombre} style={{display:"inline-block",padding:"3px 10px",margin:2,borderRadius:12,background:"#fff9e6",fontSize:11,fontWeight:600}}>{c.nombre} ({fN(c.pfH)} f/h)</span>)}</div>}</>}
 
-  const parseCargos = (str) => (str || "").split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
-  const cargosSup = parseCargos(params.cargosSupervisor);
-  const cargosTPartido = parseCargos(params.turnoPartidoAplicaCargos);
+    {/* SEDE COMPARISON */}
+    {d2&&mode==="sede"&&<SedeComp data={data} d2={d2}/>}
 
-  const esSupervisor = (cargo) => {
-    if (!cargosSup.length) return false;
-    const c = (cargo || "").toUpperCase();
-    return cargosSup.some((s) => c.includes(s));
-  };
+    {!d2&&<div style={{...crd,textAlign:"center",padding:40,color:CL.txtL,background:"#f8faf8"}}>
+      <div style={{fontSize:40,marginBottom:8}}>💾</div>
+      <p style={{fontSize:14,fontWeight:600,marginBottom:4}}>Como funciona la memoria</p>
+      <p style={{fontSize:12,maxWidth:400,margin:"0 auto"}}>1. Haz tu analisis con los datos actuales. 2. Click en <b>💾 Guardar Memoria</b> para descargar un .json. 3. El proximo mes, sube nuevos datos y luego carga el .json aqui. 4. La app detecta automaticamente si es la misma sede (compara periodos) o diferente (compara sedes).</p></div>}
+  </div>;}
 
-  const esCargoTP = (cargo) => {
-    if (!cargosTPartido.length) return true;
-    const c = (cargo || "").toUpperCase();
-    return cargosTPartido.some((s) => c.includes(s));
-  };
+function SedeComp({data,d2}){
+  const s1={nm:data.sede,n:data.cajeros.length,avg:data.avg,avgR:data.avgR,tF:data.tF,tR:data.tR,per:data.periodo,cu:data.cajeros.filter(c=>c.kpi.lab==="Cumple").length,nc:data.cajeros.filter(c=>c.kpi.lab==="No cumple").length,top:data.cajeros[0],consist:data.cajeros.reduce((s,c)=>s+c.consist.cv,0)/data.cajeros.length};
+  const s2={nm:d2.sede,n:d2.cajeros.length,avg:d2.avg,avgR:d2.avgR,tF:d2.tF,tR:d2.tR,per:d2.periodo,cu:d2.cajeros.filter(c=>c.kpi.lab==="Cumple").length,nc:d2.cajeros.filter(c=>c.kpi.lab==="No cumple").length,top:d2.cajeros[0],consist:d2.cajeros.reduce((s,c)=>s+c.consist.cv,0)/d2.cajeros.length};
+  const mt=[{l:"Cajeros",a:s1.n,b:s2.n,w:0},{l:"Prom F/H",a:fN(s1.avg),b:fN(s2.avg),w:s1.avg>s2.avg?1:2,key:1},{l:"Prom R/H",a:fN(s1.avgR),b:fN(s2.avgR),w:s1.avgR>s2.avgR?1:2},{l:"Total Fact",a:s1.tF.toLocaleString(),b:s2.tF.toLocaleString(),w:0},{l:"Cumplen",a:`${s1.cu} (${((s1.cu/s1.n)*100).toFixed(0)}%)`,b:`${s2.cu} (${((s2.cu/s2.n)*100).toFixed(0)}%)`,w:s1.cu/s1.n>s2.cu/s2.n?1:2},{l:"No Cumplen",a:`${s1.nc} (${((s1.nc/s1.n)*100).toFixed(0)}%)`,b:`${s2.nc} (${((s2.nc/s2.n)*100).toFixed(0)}%)`,w:s1.nc/s1.n<s2.nc/s2.n?1:2},{l:"Consist Prom",a:`CV ${s1.consist.toFixed(0)}%`,b:`CV ${s2.consist.toFixed(0)}%`,w:s1.consist<s2.consist?1:2},{l:"Mejor Cajero",a:s1.top?`${sN(s1.top.nombre)} (${fN(s1.top.pfH)})`:"",b:s2.top?`${sN(s2.top.nombre)} (${fN(s2.top.pfH)})`:"",w:0},{l:"Periodo",a:`${s1.per.desde} a ${s1.per.hasta}`,b:`${s2.per.desde} a ${s2.per.hasta}`,w:0}];
+  return <><div style={crd}><h3 style={{margin:"0 0 10px",fontSize:15,fontWeight:700,color:"#9b59b6"}}>🏢 Comparacion entre Sedes</h3>
+    <table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr><th style={{...TH,textAlign:"right",width:"35%",color:"#9b59b6"}}>{s1.nm}</th><th style={{...TH,textAlign:"center",width:"30%"}}>Metrica</th><th style={{...TH,width:"35%",color:CL.pri}}>{s2.nm}</th></tr></thead>
+      <tbody>{mt.map(m=><tr key={m.l} style={{background:m.key?CL.priLt:"transparent"}}><td style={{...TD,textAlign:"right",fontWeight:m.key?800:600,color:m.w===1?"#2ecc71":m.w===2?"#e74c3c":CL.txt,fontSize:m.key?16:13}}>{m.w===1?"✓ ":""}{m.a}</td><td style={{...TD,textAlign:"center",fontSize:11,color:CL.txtL,fontWeight:700}}>{m.l}</td><td style={{...TD,fontWeight:m.key?800:600,color:m.w===2?"#2ecc71":m.w===1?"#e74c3c":CL.txt,fontSize:m.key?16:13}}>{m.b}{m.w===2?" ✓":""}</td></tr>)}</tbody></table></div>
+    <div className="desk-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+      <div style={{...crd,borderTop:"3px solid #9b59b6"}}><h4 style={{margin:"0 0 8px",fontSize:13,fontWeight:700}}>🏆 Top 5 - {s1.nm}</h4>
+        {data.cajeros.slice(0,5).map((c,i)=><div key={c.nombre} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",fontSize:12,borderBottom:"1px solid #f0f2f1"}}><span style={{fontWeight:600}}>{i+1}. {sN(c.nombre)}</span><span style={{fontWeight:800,color:CL.pri}}>{fN(c.pfH)}</span></div>)}</div>
+      <div style={{...crd,borderTop:`3px solid ${CL.pri}`}}><h4 style={{margin:"0 0 8px",fontSize:13,fontWeight:700}}>🏆 Top 5 - {s2.nm}</h4>
+        {d2.cajeros.slice(0,5).map((c,i)=><div key={c.nombre} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",fontSize:12,borderBottom:"1px solid #f0f2f1"}}><span style={{fontWeight:600}}>{i+1}. {sN(c.nombre)}</span><span style={{fontWeight:800,color:CL.pri}}>{fN(c.pfH)}</span></div>)}</div></div></>;}
 
-  // Inicializar
-  const resultados = {};
-  POLITICAS_DEF.forEach((p) => {
-    resultados[p.id] = { ...p, desc: p.descFn(params), violadores: [] };
-  });
 
-  // === RANGOS DE BREAKS VALIDOS ===
-  const r15Min = params.break15Target - params.break15Tolerancia;  // 13
-  const r15Max = params.break15Target + params.break15Tolerancia;  // 17
-  const r30Min = params.break30Target - params.break30Tolerancia;  // 28
-  const r30Max = params.break30Target + params.break30Tolerancia;  // 32
-  const separacionMinH = params.separacionMinHoras;  // 2 horas
+/* ═══ SIMULATOR ═══ */
+function Sim({data}){const[excl,setExcl]=useState([]);
+  const sim=useMemo(()=>{const active=data.cajeros.filter(c=>!excl.includes(c.nombre));if(active.length===0)return null;
+    const avg=active.reduce((s,c)=>s+c.pfH,0)/active.length;const avgR=active.reduce((s,c)=>s+c.prH,0)/active.length;
+    const tF=active.reduce((s,c)=>s+c.tF,0),tR=active.reduce((s,c)=>s+c.tR,0);
+    const cu=active.filter(c=>c.pfH>=avg+2).length,ep=active.filter(c=>c.pfH>=avg&&c.pfH<avg+2).length,nc=active.filter(c=>c.pfH<avg).length;
+    return{n:active.length,avg,avgR,tF,tR,cu,ep,nc};},[data,excl]);
+  const real={n:data.cajeros.length,avg:data.avg,avgR:data.avgR,tF:data.tF,tR:data.tR,cu:data.cajeros.filter(c=>c.kpi.lab==="Cumple").length,nc:data.cajeros.filter(c=>c.kpi.lab==="No cumple").length};
+  const diff=sim?sim.avg-real.avg:0;
+  return <div style={{display:"flex",flexDirection:"column",gap:14}}>
+    <div style={crd}><h3 style={{margin:"0 0 8px",fontSize:15,fontWeight:700}}>🧮 Simulador: ¿Que pasa si...?</h3>
+      <p style={{fontSize:12,color:CL.txtL,marginBottom:10}}>Excluye cajeros para ver como cambiaria el promedio de la sede. Util para simular rotaciones o ausencias.</p>
+      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+        {data.cajeros.map(c=>{const ex=excl.includes(c.nombre);return <button key={c.nombre} onClick={()=>setExcl(ex?excl.filter(x=>x!==c.nombre):[...excl,c.nombre])}
+          style={{padding:"5px 10px",borderRadius:8,border:`1.5px solid ${ex?"#e74c3c":CL.pri+"60"}`,background:ex?"#fde8e8":"#fff",color:ex?"#e74c3c":CL.txt,fontSize:11,fontWeight:600,cursor:"pointer",opacity:ex?.6:1}}>
+          {ex?"✕ ":""}{sN(c.nombre)}{rBadge(c)} ({fN(c.pfH)})</button>})}</div>
+      {excl.length>0&&<p style={{fontSize:11,color:CL.dan,marginTop:6,fontWeight:600}}>Excluidos: {excl.length} cajero(s)</p>}</div>
+    {sim&&<div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:14,alignItems:"start"}}>
+      <div style={{...crd,borderTop:`3px solid ${CL.txtL}`}}><h4 style={{margin:"0 0 8px",fontSize:13,fontWeight:700,color:CL.txtL}}>📊 Real</h4>
+        <div style={{fontSize:11}}><p>Cajeros: <b>{real.n}</b></p><p>Prom F/H: <b>{fN(real.avg)}</b></p><p>Prom R/H: <b>{fN(real.avgR)}</b></p><p>Facturas: <b>{real.tF.toLocaleString()}</b></p></div></div>
+      <div style={{textAlign:"center",paddingTop:30}}><div style={{fontSize:28,fontWeight:900,color:diff>0?"#2ecc71":diff<0?"#e74c3c":"#666"}}>{diff>0?"+":""}{fN(diff)}</div><div style={{fontSize:11,color:CL.txtL}}>f/h</div></div>
+      <div style={{...crd,borderTop:`3px solid ${diff>0?"#2ecc71":"#e74c3c"}`}}><h4 style={{margin:"0 0 8px",fontSize:13,fontWeight:700,color:diff>0?"#2ecc71":"#e74c3c"}}>🧮 Simulado</h4>
+        <div style={{fontSize:11}}><p>Cajeros: <b>{sim.n}</b></p><p>Prom F/H: <b style={{color:diff>0?"#2ecc71":"#e74c3c"}}>{fN(sim.avg)}</b></p><p>Prom R/H: <b>{fN(sim.avgR)}</b></p><p>Facturas: <b>{sim.tF.toLocaleString()}</b></p></div></div></div>}
+    {excl.length>0&&<div style={{...crd,background:"#f0f6ff",borderLeft:"3px solid #3498db"}}><p style={{fontSize:12,margin:0}}>💡 Sin {excl.map(x=>sN(x)).join(", ")} el promedio {diff>0?"sube":"baja"} <b>{Math.abs(diff).toFixed(2)} f/h</b> ({diff>0?"mejor":"peor"}). {diff>0?`Se perderian ${(real.tF-sim.tF).toLocaleString()} facturas pero la eficiencia general mejora.`:`La eficiencia general empeora.`}</p></div>}
+    {excl.length===0&&<div style={{...crd,textAlign:"center",padding:40,color:CL.txtL}}><div style={{fontSize:40}}>🧮</div><p>Haz click en los cajeros arriba para excluirlos de la simulacion</p></div>}</div>;}
 
-  // Helper: clasifica un break por su duracion
-  // Retorna: { ok: bool, tipo: '15'|'30'|'fuera', motivo: string }
-  const clasificarBreak = (durMin) => {
-    if (durMin >= r15Min && durMin <= r15Max) return { ok: true, tipo: "15", motivo: "OK 15min" };
-    if (durMin >= r30Min && durMin <= r30Max) return { ok: true, tipo: "30", motivo: "OK 30min" };
-    if (durMin < r15Min) return { ok: false, tipo: "fuera", motivo: "muy corto" };
-    if (durMin > r15Max && durMin < r30Min) return { ok: false, tipo: "fuera", motivo: "zona muerta entre 15 y 30" };
-    return { ok: false, tipo: "fuera", motivo: "muy largo" };
-  };
+/* ═══ SCORECARD ═══ */
+function Score({data,showR}){const kt=kpiT(data);const cu=data.cajeros.filter(c=>c.kpi.lab==="Cumple"),nc=data.cajeros.filter(c=>c.kpi.lab==="No cumple"),ep=data.cajeros.filter(c=>c.kpi.lab==="En promedio");
+  const t3=data.cajeros.slice(0,3),b3=data.cajeros.slice(-3).reverse();
+  const avgConsist=data.cajeros.length>0?data.cajeros.reduce((s,c)=>s+c.consist.cv,0)/data.cajeros.length:0;
+  const health=nc.length===0?"🟢 Excelente":nc.length<=2?"🟡 Bueno":nc.length<=Math.ceil(data.cajeros.length/3)?"🟠 Regular":"🔴 Critico";
+  const sedeTH=data.cajeros.reduce((s,c)=>s+c.hrsEfec,0),sedeTD=data.cajeros.reduce((s,c)=>s+c.numDias,0);
+  // Day analysis
+  const bestDay=data.dS.length>0?data.dS.reduce((a,b)=>a.facs>b.facs?a:b):null;
+  const worstDay=data.dS.length>0?data.dS.reduce((a,b)=>a.facs<b.facs?a:b):null;
+  // Day of week aggregation
+  const dowMap={};data.dS.forEach(d=>{const dt=new Date(d.fecha+"T12:00:00");const dw=dt.getDay();if(!dowMap[dw])dowMap[dw]={regs:0,facs:0,dias:0};dowMap[dw].regs+=d.regs;dowMap[dw].facs+=d.facs;dowMap[dw].dias++;});
+  const dowArr=Object.entries(dowMap).map(([d,v])=>({dia:DC[+d],diaL:DIAS[+d],regs:v.regs,facs:v.facs,dias:v.dias,promFac:Math.round(v.facs/v.dias),promReg:Math.round(v.regs/v.dias)})).sort((a,b)=>b.promReg-a.promReg);
+  const bestDow=dowArr[0],worstDow=dowArr[dowArr.length-1];
+  // Hour analysis
+  const hMap={};data.cajeros.forEach(c=>c.hA.forEach(h=>{if(!hMap[h.hora])hMap[h.hora]=0;hMap[h.hora]+=h.regs;}));
+  const hArr=Object.entries(hMap).map(([h,r])=>({hora:+h,regs:r})).sort((a,b)=>b.regs-a.regs);
+  const peakHrs=hArr.slice(0,3),deadHrs=hArr.slice(-3).reverse();
+  // Most/least registros
+  const mostReg=data.cajeros.slice().sort((a,b)=>b.tR-a.tR)[0];
+  const leastReg=data.cajeros.slice().sort((a,b)=>a.tR-b.tR)[0];
+  const mostFac=data.cajeros.slice().sort((a,b)=>b.tF-a.tF)[0];
+  const leastFac=data.cajeros.slice().sort((a,b)=>a.tF-b.tF)[0];
+  // TPV stats
+  const tpv=data.tpvStats||[];
+  const tpvBest=tpv[0],tpvWorst=tpv.length>1?tpv[tpv.length-1]:null;
 
-  // -- Precalcular domingos únicos por mes UNA SOLA VEZ (evita filter O(n) dentro del loop de empleados) --
-  const totalDomingosPorMesGlobal = {};
-  {
-    const fechasDomPorMes = {};
-    datos.forEach((d) => {
-      if (d.DIA_SEMANA === "Domingo" && d.MES) {
-        if (!fechasDomPorMes[d.MES]) fechasDomPorMes[d.MES] = {};
-        fechasDomPorMes[d.MES][d.FECHA] = 1;
-      }
-    });
-    Object.keys(fechasDomPorMes).forEach((mes) => {
-      totalDomingosPorMesGlobal[mes] = Math.max(Object.keys(fechasDomPorMes[mes]).length, 4);
-    });
-  }
+  return <div style={{display:"flex",flexDirection:"column",gap:14}}>
+    <div style={{...crd,background:`linear-gradient(135deg,${CL.priDk},${CL.pri})`,color:"#fff",padding:"16px 20px"}}>
+      <h2 style={{margin:"0 0 4px",fontSize:20,fontWeight:800}}>🏅 Scorecard Profundo — {esc(data.sede)}</h2>
+      <p style={{margin:0,fontSize:12,opacity:.8}}>{data.periodo.desde} a {data.periodo.hasta} | {data.cajeros.length} cajeros | {data.dS.length} dias</p>
+      <div style={{marginTop:10,padding:"8px 14px",borderRadius:8,background:"rgba(255,255,255,.15)",fontSize:14,fontWeight:700,textAlign:"center"}}>{health}</div></div>
 
-  empleados.forEach((emp) => {
-    const regs = emp.registros;
-    const base = { id: emp.id, nombre: emp.nombre, cargo: emp.cargo, sede: emp.sede, seccion: emp.seccion };
+    {/* KPIs generales */}
+    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><KC label="Facturas" value={data.tF.toLocaleString()} color="#3498db"/><KC label="Registros" value={data.tR.toLocaleString()} color="#9b59b6"/>
+      <KC label="Prom F/H" value={fN(data.avg)} color="#e67e22"/><KC label="Total Hrs" value={Math.round(sedeTH)+"h"} color="#2ecc71"/>
+      <KC label="Prom Hrs/Dia" value={sedeTD>0?(sedeTH/sedeTD).toFixed(1)+"h":"—"} color="#8e44ad"/>
+      <KC label="Consistencia" value={`CV ${avgConsist.toFixed(0)}%`} color={avgConsist<30?"#2ecc71":avgConsist<50?"#f39c12":"#e74c3c"}/></div>
 
-    // --- POR DIA ---
-    regs.forEach((r) => {
-      // === POL 9 BMA: Buena Marcacion ===
-      if (r.MARCACION_OK === false) {
-        resultados.BMA.violadores.push({
-          ...base, fecha: r.FECHA,
-          detalle: "Mala marcacion: " + (r.MARCACION_MOTIVO || "incompleta") + " | " + (r.BREAK_DETALLE || "sin breaks"),
-          valor: r.TOTAL_MARCAS || 0,
-        });
-        return; // skip resto de politicas para este dia
-      }
-      const horas = r.TOTAL_HORAS || 0;
-      const horasExtra = Math.max(0, horas - params.jornadaNormal);
-      const breakPairs = r.BREAK_PAIRS || [];
-      const breaksCortos = breakPairs.filter((b) => b.tipo === "BREAK_CORTO");
-      const tpIlegales = breakPairs.filter((b) => b.tipo === "TP_ILEGAL");
-      const breakCortoMaxMin = r.BREAK_CORTO_MAX_MIN || 0;
-      const breakCortoTotalMin = r.BREAK_CORTO_TOTAL_MIN || 0;
-      const detBreak = r.BREAK_DETALLE || "";
+    {/* KPI Distribution + Top/Bottom */}
+    <div className="desk-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+      <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>📊 Distribucion KPI</h3>
+        <div style={{display:"flex",gap:8,marginBottom:8}}><div style={{flex:cu.length,background:"#2ecc71",borderRadius:6,padding:6,textAlign:"center",color:"#fff",fontSize:11,fontWeight:700,minWidth:30}}>{cu.length}</div>
+          <div style={{flex:ep.length||.5,background:"#f39c12",borderRadius:6,padding:6,textAlign:"center",color:"#fff",fontSize:11,fontWeight:700,minWidth:30}}>{ep.length}</div>
+          <div style={{flex:nc.length||.5,background:"#e74c3c",borderRadius:6,padding:6,textAlign:"center",color:"#fff",fontSize:11,fontWeight:700,minWidth:30}}>{nc.length}</div></div>
+        <div style={{fontSize:11,color:CL.txtL}}>✅ Cumplen: <b>{cu.length}</b> ({data.cajeros.length>0?((cu.length/data.cajeros.length)*100).toFixed(0):0}%) | ❌ No cumplen: <b>{nc.length}</b> ({data.cajeros.length>0?((nc.length/data.cajeros.length)*100).toFixed(0):0}%)</div></div>
+      <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>🏆 Top 3 vs ⚠️ Bottom 3</h3>
+        <div style={{display:"flex",gap:10}}>
+          <div style={{flex:1}}>{t3.map((c,i)=><div key={c.nombre} style={{fontSize:11,padding:"3px 0",color:CL.pri}}><b>{i+1}.</b> {sN(c.nombre)}{rBadge(c)} — <b>{fN(c.pfH)}</b></div>)}</div>
+          <div style={{flex:1}}>{b3.map(c=><div key={c.nombre} style={{fontSize:11,padding:"3px 0",color:CL.dan}}>#{c.rank} {sN(c.nombre)}{rBadge(c)} — <b>{fN(c.pfH)}</b></div>)}</div></div></div></div>
 
-      // POL 1: Jornada extendida sin descanso
-      // Trabaja >10h y su break corto total fue <8min (no descanso real)
-      if (horas > params.jornadaExtendidaHoras && breakCortoTotalMin < params.breakMinimoMin) {
-        resultados.JEX.violadores.push({
-          ...base, fecha: r.FECHA,
-          detalle: `${horas.toFixed(1)}h trabajadas, break corto total: ${breakCortoTotalMin}min (min ${params.breakMinimoMin}min) | ${detBreak || "sin breaks"}`,
-          valor: horas,
-        });
-      }
+    {/* Quien registra mas/menos */}
+    <div className="desk-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+      <div style={{...crd,borderLeft:"4px solid #2ecc71"}}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700}}>📦 Mas registros</h3>
+        {mostReg&&<div style={{fontSize:12}}><b>{sN(mostReg.nombre)}{rBadge(mostReg)}</b> — {mostReg.tR.toLocaleString()} reg ({mostReg.tF.toLocaleString()} fact)</div>}
+        {mostFac&&mostFac.nombre!==mostReg?.nombre&&<div style={{fontSize:11,color:CL.txtL,marginTop:4}}>Mas facturas: <b>{sN(mostFac.nombre)}</b> — {mostFac.tF.toLocaleString()}</div>}</div>
+      <div style={{...crd,borderLeft:"4px solid #e74c3c"}}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700}}>📉 Menos registros</h3>
+        {leastReg&&<div style={{fontSize:12}}><b>{sN(leastReg.nombre)}{rBadge(leastReg)}</b> — {leastReg.tR.toLocaleString()} reg ({leastReg.tF.toLocaleString()} fact)</div>}
+        {leastFac&&leastFac.nombre!==leastReg?.nombre&&<div style={{fontSize:11,color:CL.txtL,marginTop:4}}>Menos facturas: <b>{sN(leastFac.nombre)}</b> — {leastFac.tF.toLocaleString()}</div>}</div></div>
 
-      // POL 2: Break simulado (menor al minimo) - aplica a TODOS los breaks
-      // Cualquier break con duracion < breakMinimoMin se considera simulacion
-      // Solo evalua los breaks cortos (excluye TP)
-      breaksCortos.forEach((b) => {
-        if (b.duracionMin < params.breakMinimoMin) {
-          const sH = Math.floor(b.salidaH) + ":" + String(Math.round((b.salidaH % 1) * 60)).padStart(2, "0");
-          const lH = Math.floor(b.llegadaH) + ":" + String(Math.round((b.llegadaH % 1) * 60)).padStart(2, "0");
-          resultados.BRK.violadores.push({
-            ...base, fecha: r.FECHA,
-            detalle: `Break SIMULADO: ${b.duracionMin}min (${sH}-${lH}, min ${params.breakMinimoMin}min) | ${detBreak}`,
-            valor: b.duracionMin,
-          });
-        }
-      });
+    {/* Dias y Horas */}
+    <div className="desk-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+      <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>📅 Analisis por Dia</h3>
+        {bestDay&&<div style={{fontSize:12,marginBottom:6}}>📈 Mejor dia: <b>{bestDay.fechaD}</b> — {bestDay.facs.toLocaleString()} fact, {bestDay.regs.toLocaleString()} reg</div>}
+        {worstDay&&<div style={{fontSize:12,marginBottom:10}}>📉 Peor dia: <b>{worstDay.fechaD}</b> — {worstDay.facs.toLocaleString()} fact, {worstDay.regs.toLocaleString()} reg</div>}
+        <div style={{fontSize:11,fontWeight:700,color:CL.txtL,marginBottom:4}}>Promedio por dia de semana:</div>
+        {dowArr.map(d=><div key={d.dia} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",fontSize:11,borderBottom:"1px solid #f0f2f1"}}>
+          <span style={{fontWeight:600,color:d===bestDow?"#2ecc71":d===worstDow?"#e74c3c":CL.txt}}>{d===bestDow?"🔥 ":d===worstDow?"💤 ":""}{d.diaL}</span>
+          <span>{d.promFac} fact | {d.promReg} reg ({d.dias} dias)</span></div>)}</div>
+      <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>⏰ Analisis por Hora</h3>
+        {peakHrs.length>0&&<div style={{fontSize:12,marginBottom:6}}>🔥 Horas pico: {peakHrs.map(h=><span key={h.hora} style={{display:"inline-block",padding:"2px 8px",margin:"1px",borderRadius:6,background:"#e6f9ee",fontWeight:700,fontSize:11}}>{h.hora}:00 ({h.regs.toLocaleString()})</span>)}</div>}
+        {deadHrs.length>0&&<div style={{fontSize:12,marginBottom:10}}>💤 Horas muertas: {deadHrs.map(h=><span key={h.hora} style={{display:"inline-block",padding:"2px 8px",margin:"1px",borderRadius:6,background:"#fde8e8",fontWeight:700,fontSize:11}}>{h.hora}:00 ({h.regs.toLocaleString()})</span>)}</div>}
+        <div style={{fontSize:11,fontWeight:700,color:CL.txtL,marginBottom:4}}>Desglose por hora:</div>
+        <div style={{maxHeight:200,overflowY:"auto"}}>{hArr.map(h=><div key={h.hora} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",fontSize:11,borderBottom:"1px solid #f0f2f1"}}>
+          <span style={{fontWeight:600}}>{h.hora}:00</span>
+          <div style={{flex:1,margin:"0 8px"}}><div style={{height:6,borderRadius:3,background:`${CL.pri}20`}}><div style={{height:6,borderRadius:3,background:CL.pri,width:`${hArr[0]?.regs>0?(h.regs/hArr[0].regs*100):0}%`}}/></div></div>
+          <span style={{minWidth:50,textAlign:"right"}}>{h.regs.toLocaleString()}</span></div>)}</div></div></div>
 
-      // POL 3: Jornada excesiva
-      if (horas > params.jornadaMaxDia) {
-        resultados.JXC.violadores.push({
-          ...base, fecha: r.FECHA,
-          detalle: `${horas.toFixed(1)}h trabajadas (max ${params.jornadaMaxDia}h, excede ${(horas - params.jornadaMaxDia).toFixed(1)}h) | ${detBreak || "sin breaks"}`,
-          valor: horas,
-        });
-      }
+    {/* TPV Analysis */}
+    {tpv.length>0&&<div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>🖥️ Analisis por Caja (T.P.V.)</h3>
+      <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+        <KC label="Cajas activas" value={tpv.length} color="#3498db"/>
+        {tpvBest&&<KC label="Mas registros" value={`${tpvBest.tpv} (${tpvBest.regs.toLocaleString()})`} color="#2ecc71"/>}
+        {tpvWorst&&<KC label="Menos registros" value={`${tpvWorst.tpv} (${tpvWorst.regs.toLocaleString()})`} color="#e74c3c"/>}</div>
+      <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["Caja","Reg","Fact","Cajeros","Dias","Reg/Dia","Fact/Dia","Hora Pico"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead><tbody>
+        {tpv.map((t,i)=><tr key={t.tpv} style={{background:i===0?"#e6f9ee":i===tpv.length-1?"#fde8e8":"transparent"}}><td style={{...TD,fontWeight:700,fontSize:11}}>{t.tpv}</td><td style={TD}>{t.regs.toLocaleString()}</td><td style={TD}>{t.facs.toLocaleString()}</td><td style={TD}>{t.cajeros}</td><td style={TD}>{t.dias}</td><td style={{...TD,fontWeight:700,color:CL.pri}}>{t.promRegDia}</td><td style={TD}>{t.promFacDia}</td><td style={TD}>{t.peakHora!==null?t.peakHora+":00":"—"}</td></tr>)}</tbody></table></div></div>}
 
-      // POL 5: Break Fuera de Rango
-      // Cada break individual debe estar en rango 13-17 (15min) o 28-32 (30min)
-      // Si toma 2 breaks deben estar separados al menos N horas de trabajo entre ellos
-      // Ignora breaks que ya fueron reportados como BRK (simulados < breakMinimoMin)
-      const fmtHora = (h) => Math.floor(h) + ":" + String(Math.round((h % 1) * 60)).padStart(2, "0");
+    {/* Download */}
+    <div style={{...crd,textAlign:"center",padding:12}}>
+      <Btn green onClick={()=>{toast("⏳ Generando...");setTimeout(()=>{const h=buildScoreHTML(data,kt,cu,nc,ep,t3,b3,health,avgConsist,tpv,dowArr,hArr,bestDay,worstDay,sedeTH,sedeTD);dlReport(h,`Scorecard_${data.sede}`);},50);}}>📥 Descargar Scorecard PDF</Btn></div></div>;}
 
-      // Filtrar breaks evaluables (no simulados): solo los que pasan minimo de pol 2
-      const breaksEvaluables = breaksCortos.filter((b) => b.duracionMin >= params.breakMinimoMin);
+function buildScoreHTML(data,kt,cu,nc,ep,t3,b3,health,avgConsist,tpv,dowArr,hArr,bestDay,worstDay,sedeTH,sedeTD){
+  return`<div style="font-family:'Segoe UI',sans-serif;max-width:800px;margin:0 auto;padding:30px">
+<h1 style="text-align:center;color:#0d4a28">📊 Scorecard Profundo — ${esc(data.sede)}</h1>
+<p style="text-align:center;color:#666">${data.periodo.desde} a ${data.periodo.hasta} | ${data.cajeros.length} cajeros | ${data.dS.length} dias</p>
+<div style="text-align:center;padding:12px;background:${nc.length===0?"#e6f9ee":nc.length<=2?"#fff9e6":"#fde8e8"};border-radius:10px;font-size:18px;font-weight:700;margin:20px 0">${health}</div>
+<table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:13px"><tr><td style="padding:8px;border:1px solid #eee"><b>Facturas</b></td><td style="padding:8px;border:1px solid #eee">${data.tF.toLocaleString()}</td><td style="padding:8px;border:1px solid #eee"><b>Registros</b></td><td style="padding:8px;border:1px solid #eee">${data.tR.toLocaleString()}</td></tr>
+<tr><td style="padding:8px;border:1px solid #eee"><b>Prom F/H</b></td><td style="padding:8px;border:1px solid #eee;font-weight:700;color:#1a6b3c">${fN(data.avg)}</td><td style="padding:8px;border:1px solid #eee"><b>Total Hrs</b></td><td style="padding:8px;border:1px solid #eee">${Math.round(sedeTH)}h</td></tr>
+<tr><td style="padding:8px;border:1px solid #eee"><b>Cumplen</b></td><td style="padding:8px;border:1px solid #eee;color:#2ecc71">${cu.length} (${data.cajeros.length>0?((cu.length/data.cajeros.length)*100).toFixed(0):0}%)</td><td style="padding:8px;border:1px solid #eee"><b>No cumplen</b></td><td style="padding:8px;border:1px solid #eee;color:#e74c3c">${nc.length}</td></tr></table>
+<h2>🏆 Top 3 / ⚠️ Bottom 3</h2>
+<div style="display:flex;gap:14px"><div style="flex:1;background:#e6f9ee;padding:12px;border-radius:10px">${t3.map((c,i)=>`<div style="font-size:12px;padding:2px 0"><b>${i+1}.</b> ${esc(sN(c.nombre))} — <b>${fN(c.pfH)}</b> f/h</div>`).join("")}</div>
+<div style="flex:1;background:#fde8e8;padding:12px;border-radius:10px">${b3.map(c=>`<div style="font-size:12px;padding:2px 0">#${c.rank} ${esc(sN(c.nombre))} — <b>${fN(c.pfH)}</b> f/h</div>`).join("")}</div></div>
+${bestDay?`<h2>📅 Dias</h2><p>📈 Mejor: <b>${bestDay.fechaD}</b> (${bestDay.facs} fact) | 📉 Peor: <b>${worstDay.fechaD}</b> (${worstDay.facs} fact)</p>`:""}
+${dowArr.length>0?`<table style="width:100%;border-collapse:collapse;font-size:12px;margin:10px 0"><thead><tr><th style="background:#1a6b3c;color:#fff;padding:6px">Dia</th><th style="background:#1a6b3c;color:#fff;padding:6px">Prom Fact</th><th style="background:#1a6b3c;color:#fff;padding:6px">Prom Reg</th></tr></thead><tbody>${dowArr.map(d=>`<tr><td style="padding:5px;border:1px solid #eee">${d.diaL}</td><td style="padding:5px;border:1px solid #eee">${d.promFac}</td><td style="padding:5px;border:1px solid #eee">${d.promReg}</td></tr>`).join("")}</tbody></table>`:""}
+${hArr.length>0?`<h2>⏰ Horas</h2><p>🔥 Pico: ${hArr.slice(0,3).map(h=>`${h.hora}:00`).join(", ")} | 💤 Muertas: ${hArr.slice(-3).map(h=>`${h.hora}:00`).join(", ")}</p>`:""}
+${tpv.length>0?`<h2>🖥️ Cajas (T.P.V.)</h2><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="background:#1a6b3c;color:#fff;padding:6px">Caja</th><th style="background:#1a6b3c;color:#fff;padding:6px">Reg</th><th style="background:#1a6b3c;color:#fff;padding:6px">Fact</th><th style="background:#1a6b3c;color:#fff;padding:6px">Reg/Dia</th></tr></thead><tbody>${tpv.map(t=>`<tr><td style="padding:5px;border:1px solid #eee">${t.tpv}</td><td style="padding:5px;border:1px solid #eee">${t.regs.toLocaleString()}</td><td style="padding:5px;border:1px solid #eee">${t.facs.toLocaleString()}</td><td style="padding:5px;border:1px solid #eee;font-weight:700">${t.promRegDia}</td></tr>`).join("")}</tbody></table>`:""}
+<div style="text-align:center;font-size:10px;color:#999;margin-top:20px;border-top:1px solid #eee;padding-top:10px">${new Date().toLocaleDateString("es-CO")} | Generado automaticamente</div></div>`;}
 
-      // 5.1 - Validacion individual por rango
-      breaksEvaluables.forEach((b) => {
-        const cl = clasificarBreak(b.duracionMin);
-        if (!cl.ok) {
-          resultados.EBR.violadores.push({
-            ...base, fecha: r.FECHA,
-            detalle: `Break FUERA DE RANGO: ${b.duracionMin}min (${fmtHora(b.salidaH)}-${fmtHora(b.llegadaH)}). ${cl.motivo}. Validos: ${r15Min}-${r15Max}min o ${r30Min}-${r30Max}min`,
-            valor: b.duracionMin,
-          });
-        }
-      });
+/* ═══ METAS ═══ */
+function Metas({data}){const[meta,setMeta]=useState("");const metaV=parseFloat(meta);
+  const valid=!isNaN(metaV)&&metaV>0;
+  return <div style={{display:"flex",flexDirection:"column",gap:14}}>
+    <div style={{...crd,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}><h3 style={{margin:0,fontSize:15,fontWeight:700}}>🎯 Metas</h3>
+      <div style={{display:"flex",gap:8,alignItems:"center"}}><span style={{fontSize:12,fontWeight:600}}>Meta F/H:</span>
+        <input type="number" step="0.5" placeholder={fN(data.avg+KPI_CUMPLE_OFFSET)} value={meta} onChange={e=>setMeta(e.target.value)} style={{padding:"8px 12px",borderRadius:8,border:"2px solid #2ecc71",fontSize:15,fontWeight:700,width:100,textAlign:"center",outline:"none"}}/></div>
+      <p style={{fontSize:11,color:CL.txtL,margin:0}}>Define una meta y ve quien la cumple y cuanto les falta</p></div>
+    {valid&&<div style={crd}><div style={{display:"flex",gap:14,marginBottom:12,flexWrap:"wrap"}}>
+      <KC label="Meta" value={fN(metaV)} color="#2ecc71"/>
+      <KC label="Cumplen meta" value={data.cajeros.filter(c=>c.pfH>=metaV).length+"/"+data.cajeros.length} color={data.cajeros.filter(c=>c.pfH>=metaV).length>=data.cajeros.length/2?"#2ecc71":"#e74c3c"}/>
+      <KC label="Prom actual" value={fN(data.avg)} color="#e67e22"/></div>
+      <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["#","Cajero","F/H","Meta","Dif","%","Estado"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead><tbody>
+        {data.cajeros.map(c=>{const d=c.pfH-metaV,pct=(c.pfH/metaV*100);const ok=d>=0;
+          return <tr key={c.nombre} style={{background:ok?"#e6f9ee":"#fde8e8"}}><td style={{...TD,fontWeight:800}}>{c.rank}</td><td style={{...TD,fontWeight:600,fontSize:11}}>{c.nombre}{rBadge(c)}</td>
+            <td style={{...TD,fontWeight:700}}>{fN(c.pfH)}</td><td style={TD}>{fN(metaV)}</td>
+            <td style={{...TD,fontWeight:800,color:ok?"#2ecc71":"#e74c3c"}}>{ok?"+":""}{fN(d)}</td>
+            <td style={TD}>{pct.toFixed(0)}%</td>
+            <td style={TD}><Bg color={ok?"#2ecc71":pct>=80?"#f39c12":"#e74c3c"}>{ok?"✅ Cumple":pct>=80?"🔶 Cerca":"❌ Lejos"}</Bg></td></tr>})}</tbody></table></div></div>}
+    {!valid&&<div style={{...crd,textAlign:"center",padding:40,color:CL.txtL}}><div style={{fontSize:40}}>🎯</div><p>Ingresa una meta de Fact/Hora arriba para ver el progreso de cada cajero</p></div>}</div>;}
 
-      // 5.2 - Anti-fusion: si tomo 2+ breaks evaluables, verificar separacion
-      if (breaksEvaluables.length >= 2) {
-        const breaksOrdenados = [...breaksEvaluables].sort((a, b) => a.salidaH - b.salidaH);
-        for (let i = 1; i < breaksOrdenados.length; i++) {
-          const prev = breaksOrdenados[i - 1];
-          const curr = breaksOrdenados[i];
-          const horasEntre = curr.salidaH - prev.llegadaH; // horas de trabajo entre fin del 1ro e inicio del 2do
-          if (horasEntre < separacionMinH) {
-            resultados.EBR.violadores.push({
-              ...base, fecha: r.FECHA,
-              detalle: `BREAKS PEGADOS: solo ${horasEntre.toFixed(2)}h de trabajo entre fin de break (${fmtHora(prev.llegadaH)}) e inicio del siguiente (${fmtHora(curr.salidaH)}). Min ${separacionMinH}h`,
-              valor: Math.round(horasEntre * 100) / 100,
-            });
-          }
-        }
-      }
 
-      // Tambien reportar TP ilegales como break fuera de rango (>45min pero <170min)
-      tpIlegales.forEach((b) => {
-        resultados.EBR.violadores.push({
-          ...base, fecha: r.FECHA,
-          detalle: "TP ILEGAL: " + b.duracionMin + "min (" + fmtHora(b.salidaH) + "-" + fmtHora(b.llegadaH) + "). No es break corto (mayor a " + params.breakMaxPermitido + "min) ni TP legal (menor a " + params.turnoPartidoLegalMin + "min)",
-          valor: b.duracionMin,
-        });
-      });
-
-      // POL 8: HE diaria (antes pol 9)
-      if (horasExtra > params.horasExtraMaxDia) {
-        resultados.HED.violadores.push({
-          ...base, fecha: r.FECHA,
-          detalle: `${horasExtra.toFixed(1)}h extra (jornada ${params.jornadaNormal}h + max ${params.horasExtraMaxDia}h HE = ${params.jornadaNormal + params.horasExtraMaxDia}h). Total: ${horas.toFixed(1)}h`,
-          valor: horasExtra,
-        });
-      }
-    });
-
-    // --- POR SEMANA --- (solo dias con buena marcacion)
-    const regsValidos = regs.filter((r) => r.MARCACION_OK !== false);
-    const porSemana = {};
-    regsValidos.forEach((r) => {
-      const sem = r.SEMANA || "Sin semana";
-      if (!porSemana[sem]) porSemana[sem] = [];
-      porSemana[sem].push(r);
-    });
-
-    Object.entries(porSemana).forEach(([semana, regsS]) => {
-      const horasExtraSemana = regsS.reduce((s, r) => s + Math.max(0, (r.TOTAL_HORAS || 0) - params.jornadaNormal), 0);
-      // Contar dias con cualquier tipo de turno partido
-      const diasTP = regsS.filter((r) => (r.TURNOS_PARTIDOS || r.TURNO_PARTIDO || 0) > 0).length;
-
-      // POL 4: Turnos partidos excesivos
-      if (esCargoTP(emp.cargo) && diasTP > params.turnoPartidoMaxSemana) {
-        // Detalle: cuantos legales vs ilegales
-        const legales = regsS.reduce((s, r) => s + (r.TP_LEGALES || 0), 0);
-        const ilegales = regsS.reduce((s, r) => s + (r.TP_ILEGALES || 0), 0);
-        resultados.TPE.violadores.push({
-          ...base, fecha: semana,
-          detalle: `${diasTP} dias con TP en semana (max ${params.turnoPartidoMaxSemana}). Legales: ${legales}, Ilegales: ${ilegales}`,
-          valor: diasTP,
-        });
-      }
-
-      // POL 7: HE semanal (antes pol 8)
-      if (horasExtraSemana > params.horasExtraMaxSemana) {
-        resultados.HES.violadores.push({
-          ...base, fecha: semana,
-          detalle: `${horasExtraSemana.toFixed(1)}h extra en semana (max ${params.horasExtraMaxSemana}h, excede ${(horasExtraSemana - params.horasExtraMaxSemana).toFixed(1)}h)`,
-          valor: horasExtraSemana,
-        });
-      }
-    });
-
-    // --- POR MES: DOMINGOS --- (solo dias bien marcados)
-    const domingosPorMes = {};
-
-    regsValidos.forEach((r) => {
-      if (r.DIA_SEMANA === "Domingo") {
-        const mes = r.MES || "Sin mes";
-        domingosPorMes[mes] = (domingosPorMes[mes] || 0) + 1;
-      }
-    });
-
-    Object.entries(domingosPorMes).forEach(([mes, trabajados]) => {
-      const totalDom = totalDomingosPorMesGlobal[mes] || 4;
-
-      // POL 6: Domingos personal base (antes pol 7)
-      // Aplica a TODOS los cargos. Eliminada distincion supervisor/no supervisor
-      // POL 6 ahora aplica a TODOS los cargos (antes excluia supervisores)
-      {
-        const libres = totalDom - trabajados;
-        if (libres < params.domingoMinDescansoBase) {
-          resultados.DBA.violadores.push({
-            ...base, fecha: mes,
-            detalle: `${trabajados}/${totalDom} domingos trabajados, solo ${libres} libre(s) (min ${params.domingoMinDescansoBase}). Sin equilibrio`,
-            valor: trabajados,
-          });
-        }
-      }
-    });
-  });
-
-  // -- Metricas --
-  const politicas = POLITICAS_DEF.map((pd) => {
-    const r = resultados[pd.id];
-    const unicos = {};
-    r.violadores.forEach((v) => { unicos[v.id] = true; });
-    const empleadosAfectados = Object.keys(unicos).length;
-    return {
-      ...r, empleadosAfectados,
-      totalViolaciones: r.violadores.length,
-      porcentaje: totalEmpleados > 0 ? empleadosAfectados / totalEmpleados : 0,
-      cumplimiento: totalEmpleados > 0 ? Math.round((1 - empleadosAfectados / totalEmpleados) * 100) : 100,
-    };
-  });
-
-  return { politicas, totalEmpleados };
+/* ═══ ERROR BOUNDARY ═══ */
+class ErrBound extends Component{
+  constructor(p){super(p);this.state={hasErr:false,err:null};}
+  static getDerivedStateFromError(e){return{hasErr:true,err:e};}
+  componentDidCatch(e,info){console.error("AuditApp error:",e,info);}
+  render(){if(this.state.hasErr)return <div style={{padding:40,textAlign:"center",background:"#fde8e8",borderRadius:16,margin:16}}>
+    <div style={{fontSize:48,marginBottom:12}}>⚠️</div>
+    <h3 style={{fontSize:16,fontWeight:700,color:"#e74c3c",marginBottom:8}}>Algo salio mal</h3>
+    <p style={{fontSize:13,color:"#666",marginBottom:16}}>{this.state.err?.message||"Error desconocido"}</p>
+    <button onClick={()=>this.setState({hasErr:false,err:null})} style={{padding:"10px 24px",borderRadius:10,border:"none",background:"#1a6b3c",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>🔄 Reintentar</button></div>;
+  return this.props.children;}
 }
 
-/* === SMALL COMPONENTS === */
-function PillItem({ o, isSelected, onClick }) {
-  var _h = useState(false), hov = _h[0], setHov = _h[1];
-  return (
-    <button
-      onClick={onClick}
-      onMouseEnter={function(){setHov(true);}}
-      onMouseLeave={function(){setHov(false);}}
-      style={{
-        display:"flex", alignItems:"center", justifyContent:"space-between",
-        width:"100%", textAlign:"left", padding:"9px 14px",
-        borderRadius:8, fontSize:12, border:"none", cursor:"pointer",
-        background: isSelected ? "linear-gradient(135deg,rgba(26,122,46,0.1),rgba(26,122,46,0.05))" : hov ? C.sa : "transparent",
-        color: isSelected ? C.p : hov ? C.t : C.tm,
-        fontWeight: isSelected ? 700 : 400,
-        fontFamily:"'DM Sans','Plus Jakarta Sans',sans-serif",
-        transition:"all 0.15s ease",
-        borderLeft: isSelected ? "3px solid "+C.p : "3px solid transparent",
-      }}>
-      <span>{o}</span>
-      {isSelected && <span style={{fontSize:11, color:C.p, fontWeight:800}}>✓</span>}
-    </button>
-  );
-}
-
-function Pill(props) {
-  var label = props.label, value = props.value, options = props.options, onChange = props.onChange;
-  var ref = useRef(null);
-  var btnRef = useRef(null);
-  var _s = useState(false), open = _s[0], setOpen = _s[1];
-  var _pos = useState({top:0,left:0}), dropPos = _pos[0], setDropPos = _pos[1];
-
-  useEffect(function() {
-    function handler(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
-    document.addEventListener("mousedown", handler);
-    return function() { document.removeEventListener("mousedown", handler); };
-  }, []);
-
-  function handleOpen() {
-    if (!open && btnRef.current) {
-      var r = btnRef.current.getBoundingClientRect();
-      // Si el dropdown se saldría por la derecha de la pantalla, alinearlo a la derecha del botón
-      var left = r.left;
-      if (left + 200 > window.innerWidth) left = r.right - 200;
-      setDropPos({ top: r.bottom + 6, left: left });
-    }
-    setOpen(function(v){ return !v; });
-  }
-
-  var act = value && value !== options[0];
-  return (
-    <div ref={ref} style={{position:"relative"}}>
-      <button ref={btnRef} onClick={handleOpen} style={{
-        padding:"7px 12px", borderRadius:10, fontSize:12, fontWeight:500,
-        background: open ? (act ? C.p : C.sf) : (act ? C.pg : C.sf),
-        border:"1.5px solid "+(open ? C.p : act ? C.p : C.bd),
-        color: open ? (act ? "#fff" : C.t) : (act ? C.p : C.tm),
-        cursor:"pointer", display:"flex", alignItems:"center", gap:6,
-        whiteSpace:"nowrap", transition:"all 0.2s ease",
-        fontFamily:"'DM Sans','Plus Jakarta Sans',sans-serif",
-        boxShadow: open ? "0 4px 12px rgba(26,122,46,0.18)" : "0 1px 2px rgba(0,0,0,0.04)",
-      }}>
-        <span style={{opacity:0.55, fontSize:10, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.5px"}}>{label}</span>
-        <span style={{width:1, height:12, background:"currentColor", opacity:0.15, borderRadius:1}} />
-        <span style={{fontWeight:700, maxWidth:120, overflow:"hidden", textOverflow:"ellipsis"}}>{value}</span>
-        <svg width="10" height="10" viewBox="0 0 10 10" style={{opacity:0.5,transition:"transform 0.2s",transform:open?"rotate(180deg)":"rotate(0deg)"}}><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>
-      </button>
-      {open && (
-        <div style={{
-          position:"fixed", top:dropPos.top, left:dropPos.left,
-          background:C.sf, border:"1px solid "+C.bd, borderRadius:14, padding:6,
-          minWidth:210, maxHeight:280, overflowY:"auto",
-          boxShadow:"0 16px 48px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)",
-          zIndex:9999, backdropFilter:"blur(8px)",
-        }}>
-          {/* Header del dropdown */}
-          <div style={{padding:"8px 14px 6px", borderBottom:"1px solid "+C.bd, marginBottom:4}}>
-            <span style={{fontSize:10, fontWeight:700, color:C.td, textTransform:"uppercase", letterSpacing:"0.8px"}}>{label}</span>
-          </div>
-          {options.map(function(o) {
-            return <PillItem key={o} o={o} isSelected={o===value} onClick={function(){onChange(o);setOpen(false);}} />;
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Componente reutilizable: tooltip de información al hacer hover
-function InfoTip({ text, children }) {
-  var _h = useState(false), hover = _h[0], setHover = _h[1];
-  return (
-    <span style={{position:"relative",display:"inline-flex",alignItems:"center",gap:4,cursor:"help"}}
-      onMouseEnter={function(){setHover(true);}} onMouseLeave={function(){setHover(false);}}>
-      {children}
-      <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:14,height:14,borderRadius:"50%",background:"rgba(122,147,130,0.2)",color:"#7a9382",fontSize:9,fontWeight:700,lineHeight:1}}>?</span>
-      {hover && (
-        <span style={{position:"absolute",bottom:"calc(100% + 8px)",left:"50%",transform:"translateX(-50%)",background:"rgba(8,18,10,0.95)",color:"#fff",padding:"8px 12px",borderRadius:8,fontSize:11,lineHeight:1.5,whiteSpace:"normal",minWidth:180,maxWidth:260,zIndex:10000,boxShadow:"0 8px 24px rgba(0,0,0,0.3)",fontWeight:400,pointerEvents:"none"}}>
-          {text}
-          <span style={{position:"absolute",top:"100%",left:"50%",transform:"translateX(-50%)",width:0,height:0,borderLeft:"6px solid transparent",borderRight:"6px solid transparent",borderTop:"6px solid rgba(8,18,10,0.95)"}} />
-        </span>
-      )}
-    </span>
-  );
-}
-
-// Componente botón "?" que abre una guía rápida por vista
-function HelpButton({ view }) {
-  var _o = useState(false), open = _o[0], setOpen = _o[1];
-
-  // Cerrar con ESC
-  useEffect(function() {
-    if (!open) return;
-    var handler = function(e) { if (e.key === "Escape") setOpen(false); };
-    window.addEventListener("keydown", handler);
-    return function() { window.removeEventListener("keydown", handler); };
-  }, [open]);
-
-  var guides = {
-    dashboard: {
-      t: "Dashboard",
-      pasos: [
-        "Mira la curva: las barras son personal presente por hora, la línea es ventas.",
-        "Usa los filtros (Sede, Mes, Clase, etc.) para profundizar en un segmento específico.",
-        "Las tarjetas arriba muestran métricas clave. Pasa el mouse sobre el ícono (?) para ver qué mide cada una.",
-        "Activa 'Tabla' o 'Ambos' para ver los datos detallados por empleado/día.",
-        "La venta total respeta todos los filtros activos."
-      ],
-      tips: [
-        "Si quieres ver una sede específica: usa 'Filtro Maestro' arriba para que aplique a toda la app.",
-        "La Quincena Retail son los días de alto flujo (1-3, 15-17, fin de mes)."
-      ]
-    },
-    resumen: {
-      t: "Resumen Ejecutivo",
-      pasos: [
-        "El banner superior compara el mes actual con el anterior: cumplimiento, empleados afectados y venta.",
-        "Si hay alertas (🔔), revisa qué políticas cambiaron más de 3% respecto al mes anterior.",
-        "El círculo grande muestra el cumplimiento general de las 9 políticas.",
-        "'Sedes Críticas' son aquellas con cumplimiento <70%.",
-        "El ranking al final ordena todas las sedes de peor a mejor cumplimiento."
-      ],
-      tips: [
-        "Si una sede está al 0%, significa que todos los empleados violaron la mayoría de políticas.",
-        "Para ver qué política específica está mal, ve a 'Políticas'."
-      ]
-    },
-    policies: {
-      t: "Políticas",
-      pasos: [
-        "Cada tarjeta es una política (POL 1 a 9) con su % de cumplimiento.",
-        "Verde ≥90%, Amarillo 70-89%, Rojo <70%.",
-        "Haz clic en una tarjeta para ver los empleados que violaron esa política.",
-        "Usa 'Configurar Parámetros' para ajustar los umbrales (horas, breaks, etc.).",
-        "'Generar Informe' descarga un reporte PDF con firma. 'Exportar Excel' genera un archivo con tablas coloreadas."
-      ],
-      tips: [
-        "Los parámetros configurados se aplican también a Riesgo y Tendencia.",
-        "Si ajustas parámetros, todos los cálculos se actualizan en tiempo real."
-      ]
-    },
-    riesgo: {
-      t: "Riesgo",
-      pasos: [
-        "Lista de empleados ordenados por cantidad total de infracciones.",
-        "Los chips de colores muestran qué políticas violó cada empleado.",
-        "Filtra por Política específica para ver el top de infractores de esa norma.",
-        "Haz clic en un empleado para ver el detalle en Auditoría."
-      ],
-      tips: [
-        "Útil para identificar casos recurrentes que requieren acción de RH.",
-        "Un empleado con muchas infracciones acumuladas indica un problema sistémico, no esporádico."
-      ]
-    },
-    tendencia: {
-      t: "Tendencia",
-      pasos: [
-        "Gráfico de líneas con la evolución mes a mes del cumplimiento de cada política.",
-        "Filtra por Sede para ver la tendencia específica de una tienda.",
-        "El cálculo puede tomar varios segundos (especialmente con muchos datos)."
-      ],
-      tips: [
-        "Si una política baja mes a mes, hay un problema creciente que hay que atender.",
-        "Si sube, el equipo está mejorando."
-      ]
-    },
-    eficiencia: {
-      t: "Eficiencia",
-      pasos: [
-        "Muestra la relación entre personal presente y ventas generadas por hora.",
-        "Eficiencia alta = pocas personas generando muchas ventas.",
-        "Eficiencia baja = muchas personas con pocas ventas (posible sobredotación).",
-        "El ranking identifica qué sedes son más/menos eficientes."
-      ],
-      tips: [
-        "Útil para decidir ajustes de turnos: ¿tienes demasiado personal en horas bajas?",
-        "Compara entre sedes para replicar mejores prácticas."
-      ]
-    },
-    auditoria: {
-      t: "Auditoría",
-      pasos: [
-        "Busca un empleado por nombre, ID o cargo.",
-        "Haz clic en el empleado para abrir su ficha detallada.",
-        "Dentro, selecciona un día para ver: entrada, breaks, salida y qué políticas se evaluaron.",
-        "Cada política muestra si cumplió ✓ o violó ✗ con explicación paso a paso."
-      ],
-      tips: [
-        "Ideal para revisar casos específicos antes de una conversación con RH o el empleado.",
-        "Te muestra el cálculo exacto: si viola POL 3 porque trabajó 9.5h > 9h tope."
-      ]
-    },
-    upload: {
-      t: "Cargar Datos",
-      pasos: [
-        "Haz clic en el área punteada o arrastra los archivos allí.",
-        "La app detecta automáticamente el tipo (marcaciones, facturas o memoria JSON).",
-        "Puedes cargar varios archivos a la vez.",
-        "Al terminar, ve a cualquier vista para empezar a analizar."
-      ],
-      tips: [
-        "Si ya trabajaste antes con los datos, usa Exportar Memoria (.json) para no subir Excel de nuevo.",
-        "El proceso puede tomar 30s-2min dependiendo del tamaño del archivo."
-      ]
-    },
-    rules: {
-      t: "Manual",
-      pasos: [
-        "Navega por las 8 secciones usando las pestañas de arriba.",
-        "Cada sección explica un aspecto: vistas, filtros, exportación, políticas, conceptos, flujo, FAQs.",
-        "Lee 'Flujo de Trabajo' si es tu primera vez usando la app."
-      ]
-    }
-  };
-
-  var guide = guides[view];
-  if (!guide) return null;
-
-  var modalContent = open ? (
-    <div onClick={function(){setOpen(false);}} style={{position:"fixed",inset:0,zIndex:99999,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-      <div onClick={function(e){e.stopPropagation();}} style={{background:C.sf,borderRadius:18,width:"100%",maxWidth:500,maxHeight:"85vh",display:"flex",flexDirection:"column",overflow:"hidden",boxShadow:"0 24px 60px rgba(0,0,0,0.3)",border:"1px solid "+C.bd}}>
-        <div style={{padding:"18px 22px",background:"linear-gradient(135deg,#0f1f13,#1a7a2e)",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
-          <div>
-            <div style={{fontSize:10,color:"#86b394",fontWeight:700,textTransform:"uppercase",letterSpacing:"1px",marginBottom:2}}>Guía Rápida</div>
-            <div style={{color:"#f0fdf4",fontSize:17,fontWeight:800,fontFamily:"'DM Sans',sans-serif"}}>{guide.t}</div>
-          </div>
-          <button onClick={function(){setOpen(false);}} style={{width:32,height:32,borderRadius:8,background:"rgba(255,255,255,0.15)",border:"none",color:"#fff",fontSize:16,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontWeight:700}}>✕</button>
-        </div>
-        <div style={{padding:"20px 22px",overflowY:"auto",flex:1}}>
-          <div style={{marginBottom:18}}>
-            <div style={{fontSize:11,color:C.td,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:10}}>📋 Pasos</div>
-            {guide.pasos.map(function(p,i){
-              return (
-                <div key={i} style={{display:"flex",gap:10,marginBottom:10,alignItems:"flex-start"}}>
-                  <div style={{minWidth:22,height:22,borderRadius:"50%",background:C.p,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,flexShrink:0}}>{i+1}</div>
-                  <div style={{fontSize:12,color:C.t,lineHeight:1.6}}>{p}</div>
-                </div>
-              );
-            })}
-          </div>
-          {guide.tips && (
-            <div style={{padding:12,borderRadius:10,background:"rgba(217,119,6,0.07)",border:"1px solid rgba(217,119,6,0.2)"}}>
-              <div style={{fontSize:11,color:C.ac,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:8}}>💡 Tips</div>
-              {guide.tips.map(function(t,i){
-                return <div key={i} style={{fontSize:12,color:C.tm,lineHeight:1.6,marginBottom:5}}>• {t}</div>;
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  ) : null;
-
-  return (
-    <>
-      <button onClick={function(){setOpen(true);}}
-        title="Guía rápida"
-        style={{width:32,height:32,borderRadius:"50%",background:"rgba(26,122,46,0.08)",border:"1.5px solid "+C.bd,color:C.p,fontSize:14,fontWeight:800,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.2s",fontFamily:"'DM Sans',sans-serif"}}
-        onMouseEnter={function(e){e.currentTarget.style.background=C.p;e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor=C.p;}}
-        onMouseLeave={function(e){e.currentTarget.style.background="rgba(26,122,46,0.08)";e.currentTarget.style.color=C.p;e.currentTarget.style.borderColor=C.bd;}}>?</button>
-      {open && ReactDOM.createPortal(modalContent, document.body)}
-    </>
-  );
-}
-
-function Tip(props) {
-  if (!props.active || !props.payload || !props.payload.length) return null;
-  return (
-    <div style={{background:"rgba(8,18,10,0.94)",border:"1px solid rgba(52,211,153,0.15)",borderRadius:12,padding:"11px 15px",boxShadow:"0 8px 24px rgba(0,0,0,0.3)",backdropFilter:"blur(8px)"}}>
-      <p style={{color:"#f0fdf4",fontWeight:700,fontSize:13,margin:"0 0 6px",fontFamily:"'DM Sans',sans-serif"}}>{props.label}</p>
-      {props.payload.map(function(p,i) {
-        return <div key={i} style={{display:"flex",alignItems:"center",gap:7,marginBottom:3}}>
-          <div style={{width:8,height:8,borderRadius:3,background:p.color,boxShadow:"0 0 4px "+p.color+"66"}} />
-          <span style={{color:"#86b394",fontSize:11}}>{p.name}:</span>
-          <span style={{color:"#ffffff",fontSize:12,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{typeof p.value === "number" ? p.value.toLocaleString() : p.value}</span>
-        </div>;
-      })}
-    </div>
-  );
-}
-
-/* === DASHBOARD VIEW === */
-/* === RESUMEN EJECUTIVO VIEW === */
-function ResumenView({ marc, fact, parametros }) {
-  // Filtro local de area (desc_cri_mayor_item_2) para facturas
-  const [areaFiltro, setAreaFiltro] = useState("Todas");
-  const areasDisponibles = useMemo(() => {
-    const s = {};
-    fact.forEach(f => { if (f.seccion) s[f.seccion] = 1; });
-    return ["Todas", ...Object.keys(s).sort()];
-  }, [fact]);
-  const factFiltrado = useMemo(() => {
-    if (areaFiltro === "Todas") return fact;
-    return fact.filter(f => f.seccion === areaFiltro);
-  }, [fact, areaFiltro]);
-
-  const totalMarc = marc.length;
-  const totalFact = factFiltrado.length;
-
-  const stats = useMemo(() => {
-    if (totalMarc === 0 && totalFact === 0) return null;
-
-    // Sedes
-    const sedesMap = {};
-    marc.forEach(m => { if (m.DEPENDENCIA) sedesMap[m.DEPENDENCIA] = (sedesMap[m.DEPENDENCIA]||0)+1; });
-    const totalSedes = Object.keys(sedesMap).length;
-
-    // Empleados
-    const empMap = {};
-    marc.forEach(m => { if (m.IDENTIFICACION) empMap[m.IDENTIFICACION] = 1; });
-    const totalEmpleados = Object.keys(empMap).length;
-
-    // Fechas
-    const fechas = {};
-    marc.forEach(m => { if (m.FECHA) fechas[m.FECHA] = 1; });
-    const totalDias = Object.keys(fechas).length;
-
-    // Meses
-    const meses = {};
-    marc.forEach(m => { if (m.MES) meses[m.MES] = 1; });
-
-    // Promedio horas
-    const promHoras = totalMarc > 0 ? (marc.reduce((s,m) => s+(m.TOTAL_HORAS||0), 0) / totalMarc).toFixed(1) : "0";
-
-    // Venta total
-    const ventaTotal = factFiltrado.reduce((s,f) => s+(f.venta||0), 0);
-
-    // Políticas globales (UNA sola llamada para todo)
-    const globalResult = evaluarPoliticas(marc, parametros, "Todas");
-    const promGlobal = globalResult.politicas.length > 0 ? Math.round(globalResult.politicas.reduce((s,p) => s+p.cumplimiento, 0) / globalResult.politicas.length) : 100;
-    const polsEnRojo = globalResult.politicas.filter(p => p.cumplimiento < 70);
-    const polsEnAmarillo = globalResult.politicas.filter(p => p.cumplimiento >= 70 && p.cumplimiento < 90);
-
-    // Per-sede cumplimiento derivado del resultado global (sin recalcular)
-    const empPorSede = {};
-    marc.forEach(m => {
-      if (m.DEPENDENCIA && m.IDENTIFICACION) {
-        if (!empPorSede[m.DEPENDENCIA]) empPorSede[m.DEPENDENCIA] = {};
-        empPorSede[m.DEPENDENCIA][m.IDENTIFICACION] = 1;
-      }
-    });
-    const violPorSede = {};
-    const violPorSedePol = {}; // sede → polId → {empleados uniquos}
-    globalResult.politicas.forEach(pol => {
-      pol.violadores.forEach(v => {
-        if (v.sede) {
-          if (!violPorSede[v.sede]) violPorSede[v.sede] = {};
-          violPorSede[v.sede][v.id] = (violPorSede[v.sede][v.id]||0) + 1;
-          if (!violPorSedePol[v.sede]) violPorSedePol[v.sede] = {};
-          if (!violPorSedePol[v.sede][pol.id]) violPorSedePol[v.sede][pol.id] = {};
-          violPorSedePol[v.sede][pol.id][v.id] = 1;
-        }
-      });
-    });
-
-    const sedesCriticas = [];
-    const sedesOk = [];
-    Object.keys(sedesMap).forEach(sede => {
-      const empCount = empPorSede[sede] ? Object.keys(empPorSede[sede]).length : 0;
-      // Cumplimiento por sede = promedio del cumplimiento de cada política en esa sede
-      // Cumplimiento de cada política en la sede = (1 - afectadosEnSede / empleadosEnSede) × 100
-      var polsRojas = 0;
-      var sumCumpl = 0;
-      var polsCount = globalResult.politicas.length;
-      globalResult.politicas.forEach(function(pol) {
-        var afectados = violPorSedePol[sede] && violPorSedePol[sede][pol.id] ? Object.keys(violPorSedePol[sede][pol.id]).length : 0;
-        var polCumpl = empCount > 0 ? Math.round((1 - afectados / empCount) * 100) : 100;
-        sumCumpl += polCumpl;
-        if (polCumpl < 70) polsRojas++;
-      });
-      const cumpl = polsCount > 0 ? Math.round(sumCumpl / polsCount) : 100;
-      const obj = { sede:sede, cumplimiento:cumpl, empleados:empCount, polsRojas:polsRojas, registros:sedesMap[sede] };
-      if (cumpl < 70) sedesCriticas.push(obj);
-      else sedesOk.push(obj);
-    });
-    sedesCriticas.sort((a,b) => a.cumplimiento - b.cumplimiento);
-    sedesOk.sort((a,b) => a.cumplimiento - b.cumplimiento);
-
-    // Top empleados infractores
-    const empInfMap = {};
-    globalResult.politicas.forEach(pol => {
-      pol.violadores.forEach(v => {
-        if (!empInfMap[v.id]) empInfMap[v.id] = { id:v.id, nombre:v.nombre, cargo:v.cargo, sede:v.sede, total:0 };
-        empInfMap[v.id].total++;
-      });
-    });
-    const topInfractores = Object.values(empInfMap).sort((a,b) => b.total-a.total).slice(0,5);
-
-    // ═══ COMPARATIVO MES vs MES ═══
-    const ORDEN_MES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-    const mesesArr = Object.keys(meses).sort((a,b) => ORDEN_MES.indexOf(a.toLowerCase().trim()) - ORDEN_MES.indexOf(b.toLowerCase().trim()));
-
-    let comparativo = null;
-    let alertas = [];
-    if (mesesArr.length >= 2) {
-      const mesActual = mesesArr[mesesArr.length - 1];
-      const mesAnterior = mesesArr[mesesArr.length - 2];
-
-      // Evaluar cada mes
-      const marcActual = marc.filter(m => m.MES === mesActual);
-      const marcAnterior = marc.filter(m => m.MES === mesAnterior);
-      const resultActual = evaluarPoliticas(marcActual, parametros, "Todas");
-      const resultAnterior = evaluarPoliticas(marcAnterior, parametros, "Todas");
-
-      const cumplActual = resultActual.politicas.length > 0 ? Math.round(resultActual.politicas.reduce((s,p) => s+p.cumplimiento, 0) / resultActual.politicas.length) : 100;
-      const cumplAnterior = resultAnterior.politicas.length > 0 ? Math.round(resultAnterior.politicas.reduce((s,p) => s+p.cumplimiento, 0) / resultAnterior.politicas.length) : 100;
-
-      // Empleados afectados por mes
-      const empAfActual = {};
-      resultActual.politicas.forEach(p => p.violadores.forEach(v => empAfActual[v.id] = 1));
-      const empAfAnterior = {};
-      resultAnterior.politicas.forEach(p => p.violadores.forEach(v => empAfAnterior[v.id] = 1));
-
-      // Ventas por mes
-      const ventaActual = fact.filter(f => f.mes === mesActual).reduce((s,f) => s+(f.venta||0), 0);
-      const ventaAnterior = fact.filter(f => f.mes === mesAnterior).reduce((s,f) => s+(f.venta||0), 0);
-
-      comparativo = {
-        mesActual, mesAnterior,
-        cumplActual, cumplAnterior, cumplDelta: cumplActual - cumplAnterior,
-        empAfActual: Object.keys(empAfActual).length,
-        empAfAnterior: Object.keys(empAfAnterior).length,
-        empAfDelta: Object.keys(empAfActual).length - Object.keys(empAfAnterior).length,
-        ventaActual, ventaAnterior, ventaDelta: ventaActual - ventaAnterior,
-      };
-
-      // Alertas automáticas: detectar cambios significativos por política
-      resultActual.politicas.forEach(polAct => {
-        const polAnt = resultAnterior.politicas.find(p => p.id === polAct.id);
-        if (!polAnt) return;
-        const delta = polAct.cumplimiento - polAnt.cumplimiento;
-        if (Math.abs(delta) >= 3) {
-          alertas.push({
-            tipo: delta > 0 ? "mejoro" : "empeoro",
-            pol: polAct,
-            delta: delta,
-            msg: "POL " + polAct.num + " (" + polAct.nombre + ") " + (delta > 0 ? "mejoró" : "empeoró") + " " + Math.abs(delta) + "% vs " + mesAnterior,
-          });
-        }
-      });
-      alertas.sort((a,b) => Math.abs(b.delta) - Math.abs(a.delta));
-    }
-
-    return {
-      totalSedes, totalEmpleados, totalDias, totalMarc, totalFact, meses:Object.keys(meses),
-      promHoras, ventaTotal, promGlobal, sedesCriticas, sedesOk,
-      polsEnRojo, polsEnAmarillo, topInfractores,
-      politicas: globalResult.politicas,
-      comparativo, alertas,
-    };
-  }, [marc, factFiltrado, parametros]);
-
-  if (!stats) return (
-    <div style={{textAlign:"center",padding:60}}>
-      <div style={{fontSize:40,marginBottom:16}}>📊</div>
-      <p style={{color:C.tm,fontSize:14}}>Carga datos para ver el resumen ejecutivo</p>
-    </div>
-  );
-
-  const pctColor = (c) => c >= 90 ? C.p : c >= 70 ? C.ac : C.dg;
-  const pctBg = (c) => c >= 90 ? "rgba(31,107,46,0.08)" : c >= 70 ? "rgba(180,83,9,0.08)" : "rgba(220,38,38,0.08)";
-  const pctBorder = (c) => c >= 90 ? "rgba(31,107,46,0.2)" : c >= 70 ? "rgba(180,83,9,0.2)" : "rgba(220,38,38,0.2)";
-
-  return (
-    <div>
-      <div style={{marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:16,flexWrap:"wrap"}}>
-        <div>
-          <h2 style={{color:C.w,fontSize:20,fontWeight:800,margin:"0 0 4px"}}>Resumen Ejecutivo</h2>
-          <p style={{color:C.td,fontSize:12,margin:0}}>{stats.meses.join(", ")} · {stats.totalSedes} sedes · {stats.totalEmpleados} empleados · {stats.totalDias} días{areaFiltro !== "Todas" && <span style={{color:C.p,fontWeight:600}}> · Area: {areaFiltro}</span>}</p>
-        </div>
-        {areasDisponibles.length > 1 && (
-          <Pill label="Area" value={areaFiltro} options={areasDisponibles} onChange={setAreaFiltro} />
-        )}
-      </div>
-
-      {stats.comparativo && (
-        <div style={{padding:"16px 20px",borderRadius:14,marginBottom:16,background:"linear-gradient(135deg,#f0fdf4,#ffffff)",border:"1px solid "+C.bd,display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:16}}>
-          {(() => {
-            const cmp = stats.comparativo;
-            const deltaColor = (d, inverso) => { const positivo = inverso ? d < 0 : d > 0; return d === 0 ? C.td : positivo ? C.p : C.dg; };
-            const deltaIcon = (d) => d > 0 ? "↑" : d < 0 ? "↓" : "→";
-            const tiles = [
-              { l:"Cumplimiento", v:cmp.cumplActual+"%", delta:cmp.cumplDelta, suf:"%", inverso:false },
-              { l:"Empleados Afectados", v:cmp.empAfActual, delta:cmp.empAfDelta, suf:"", inverso:true },
-              { l:"Venta", v:fmtMoney(cmp.ventaActual), delta:cmp.ventaDelta, suf:"", inverso:false, money:true },
-            ];
-            return tiles.map((t,i) => (
-              <div key={i} style={{borderRight:i<2?"1px solid "+C.bd:"none",paddingRight:16}}>
-                <div style={{fontSize:10,color:C.td,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:4}}>{t.l}</div>
-                <div style={{fontSize:18,fontWeight:800,color:C.t,fontFamily:"'DM Sans',sans-serif",marginBottom:3}}>{t.v}</div>
-                <div style={{fontSize:11,fontWeight:600,color:deltaColor(t.delta, t.inverso),display:"flex",alignItems:"center",gap:4}}>
-                  <span style={{fontSize:13}}>{deltaIcon(t.delta)}</span>
-                  <span>{t.money ? fmtMoney(Math.abs(t.delta)) : Math.abs(t.delta) + t.suf}</span>
-                  <span style={{color:C.td,fontWeight:400,fontSize:10}}>vs {cmp.mesAnterior}</span>
-                </div>
-              </div>
-            ));
-          })()}
-        </div>
-      )}
-
-      {stats.alertas && stats.alertas.length > 0 && (
-        <div style={{padding:"12px 16px",borderRadius:12,marginBottom:16,background:"rgba(217,119,6,0.06)",border:"1px solid rgba(217,119,6,0.2)"}}>
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
-            <span style={{fontSize:14}}>🔔</span>
-            <span style={{fontSize:12,fontWeight:700,color:C.ac,fontFamily:"'DM Sans',sans-serif",textTransform:"uppercase",letterSpacing:"0.5px"}}>Alertas Automáticas</span>
-            <span style={{fontSize:10,color:C.td}}>(cambios ≥3% vs mes anterior)</span>
-          </div>
-          <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-            {stats.alertas.slice(0,6).map((a,i) => {
-              const bg = a.tipo === "mejoro" ? "rgba(26,122,46,0.08)" : "rgba(225,29,72,0.08)";
-              const br = a.tipo === "mejoro" ? "rgba(26,122,46,0.25)" : "rgba(225,29,72,0.25)";
-              const col = a.tipo === "mejoro" ? C.p : C.dg;
-              const icon = a.tipo === "mejoro" ? "↑" : "↓";
-              return (
-                <div key={i} style={{padding:"6px 12px",borderRadius:20,background:bg,border:"1px solid "+br,display:"flex",alignItems:"center",gap:6}}>
-                  <span style={{fontSize:13,color:col,fontWeight:800}}>{icon}</span>
-                  <span style={{fontSize:11,fontWeight:600,color:C.t}}>POL {a.pol.num}</span>
-                  <span style={{fontSize:10,color:C.td}}>{a.pol.nombre}</span>
-                  <span style={{fontSize:11,fontWeight:800,color:col}}>{a.delta > 0 ? "+" : ""}{a.delta}%</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      <div style={{padding:20,borderRadius:16,marginBottom:16,background:pctBg(stats.promGlobal),border:"2px solid "+pctBorder(stats.promGlobal),display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
-        <div style={{width:80,height:80,borderRadius:"50%",border:"4px solid "+pctColor(stats.promGlobal),display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-          <span style={{fontSize:28,fontWeight:900,color:pctColor(stats.promGlobal)}}>{stats.promGlobal}%</span>
-        </div>
-        <div style={{flex:1,minWidth:200}}>
-          <div style={{fontSize:16,fontWeight:800,color:C.t,marginBottom:4}}>Cumplimiento General</div>
-          <div style={{fontSize:12,color:C.tm,lineHeight:1.6}}>
-            {stats.sedesCriticas.length > 0 && <span style={{color:C.dg,fontWeight:700}}>{stats.sedesCriticas.length} sede{stats.sedesCriticas.length>1?"s":""} en estado crítico (&lt;70%). </span>}
-            {stats.polsEnRojo.length > 0 && <span style={{color:C.dg,fontWeight:600}}>{stats.polsEnRojo.length} política{stats.polsEnRojo.length>1?"s":""} en rojo. </span>}
-            {stats.polsEnAmarillo.length > 0 && <span style={{color:C.ac,fontWeight:600}}>{stats.polsEnAmarillo.length} en amarillo. </span>}
-            {stats.sedesCriticas.length === 0 && stats.polsEnRojo.length === 0 && <span style={{color:C.p,fontWeight:600}}>Todas las sedes con cumplimiento aceptable.</span>}
-          </div>
-        </div>
-        <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
-          {[
-            {v:stats.totalEmpleados, l:"Empleados", c:C.p},
-            {v:stats.promHoras+"h", l:"Prom/día", c:C.s},
-            {v:stats.totalSedes, l:"Sedes", c:"#8b5cf6"},
-          ].map((s,i) => (
-            <div key={i} style={{textAlign:"center"}}>
-              <div style={{fontSize:22,fontWeight:800,color:s.c}}>{s.v}</div>
-              <div style={{fontSize:10,color:C.td,textTransform:"uppercase",letterSpacing:"0.3px"}}>{s.l}</div>
-            </div>
-          ))}
-          {stats.ventaTotal > 0 && <div style={{textAlign:"center"}}>
-            <div style={{fontSize:22,fontWeight:800,color:"#06b6d4"}}>{fmtMoney(stats.ventaTotal)}</div>
-            <div style={{fontSize:10,color:C.td,textTransform:"uppercase",letterSpacing:"0.3px"}}>Venta</div>
-          </div>}
-        </div>
-      </div>
-
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
-
-        <div style={{borderRadius:14,border:"1px solid "+C.bd,overflow:"hidden",boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-          <div style={{padding:"13px 18px",background:"linear-gradient(135deg,#5a0a0a,#991b1b)"}}>
-            <div style={{color:"#fecaca",fontWeight:700,fontSize:13}}>Sedes Críticas ({stats.sedesCriticas.length})</div>
-            <div style={{color:"#fca5a5",fontSize:10,marginTop:2}}>Cumplimiento &lt;70% — requieren atención inmediata</div>
-          </div>
-          <div style={{background:C.sf,maxHeight:220,overflowY:"auto"}}>
-            {stats.sedesCriticas.length === 0 ? (
-              <div style={{padding:20,textAlign:"center",color:C.p,fontSize:12,fontWeight:600}}>✅ Ninguna sede en estado crítico</div>
-            ) : stats.sedesCriticas.map((s,i) => (
-              <div key={s.sede} style={{padding:"12px 18px",borderBottom:"1px solid "+C.bd,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div>
-                  <div style={{fontSize:12,fontWeight:600,color:C.t}}>{s.sede}</div>
-                  <div style={{fontSize:10,color:C.td}}>{s.empleados} empleados · {s.polsRojas} pol. en rojo</div>
-                </div>
-                <span style={{fontSize:16,fontWeight:800,color:C.dg}}>{s.cumplimiento}%</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div style={{borderRadius:14,border:"1px solid "+C.bd,overflow:"hidden",boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-          <div style={{padding:"13px 18px",background:"linear-gradient(135deg,#5a2d0a,#92400e)"}}>
-            <div style={{color:"#fde68a",fontWeight:700,fontSize:13}}>Top Empleados con Infracciones</div>
-            <div style={{color:"#fcd34d",fontSize:10,marginTop:2}}>Mayor cantidad de violaciones acumuladas</div>
-          </div>
-          <div style={{background:C.sf,maxHeight:220,overflowY:"auto"}}>
-            {stats.topInfractores.length === 0 ? (
-              <div style={{padding:20,textAlign:"center",color:C.p,fontSize:12,fontWeight:600}}>✅ Sin infracciones registradas</div>
-            ) : stats.topInfractores.map((emp,i) => (
-              <div key={emp.id} style={{padding:"12px 18px",borderBottom:"1px solid "+C.bd,display:"flex",alignItems:"center",gap:12}}>
-                <span style={{width:26,height:26,borderRadius:7,background:i<3?"rgba(220,38,38,0.1)":C.sa,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,color:i<3?C.dg:C.td,flexShrink:0}}>{i+1}</span>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:12,fontWeight:600,color:C.t,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{emp.nombre}</div>
-                  <div style={{fontSize:10,color:C.td}}>{emp.cargo} · {emp.sede}</div>
-                </div>
-                <span style={{fontSize:16,fontWeight:800,color:C.dg}}>{emp.total}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div style={{borderRadius:14,border:"1px solid "+C.bd,overflow:"hidden",boxShadow:"0 1px 4px rgba(31,107,46,0.07)",marginBottom:16}}>
-        <div style={{padding:"13px 18px",background:"linear-gradient(135deg,#0f1f13,#1f6b2e)"}}>
-          <div style={{color:"#e8f5eb",fontWeight:700,fontSize:13}}>9 Políticas — Estado General</div>
-        </div>
-        <div style={{background:C.sf,padding:16}}>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10}}>
-            {stats.politicas.map(p => {
-              const pc = pctColor(p.cumplimiento);
-              return (
-                <div key={p.id} style={{padding:12,borderRadius:10,background:pctBg(p.cumplimiento),border:"1px solid "+pctBorder(p.cumplimiento)}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                    <span style={{fontSize:10,fontWeight:700,color:C.td}}>POL {p.num}</span>
-                    <span style={{fontSize:14,fontWeight:800,color:pc}}>{p.cumplimiento}%</span>
-                  </div>
-                  <div style={{fontSize:11,fontWeight:600,color:C.t,marginBottom:4,lineHeight:1.3}}>{p.nombre}</div>
-                  <div style={{height:4,borderRadius:2,background:"rgba(0,0,0,0.06)",overflow:"hidden"}}>
-                    <div style={{height:"100%",borderRadius:2,background:pc,width:p.cumplimiento+"%"}} />
-                  </div>
-                  <div style={{fontSize:10,color:C.td,marginTop:4}}>{p.empleadosAfectados} afectados · {p.totalViolaciones} eventos</div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      <div style={{borderRadius:14,border:"1px solid "+C.bd,overflow:"hidden",boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-        <div style={{padding:"13px 18px",background:"linear-gradient(135deg,#0f1f13,#1f6b2e)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <div style={{color:"#e8f5eb",fontWeight:700,fontSize:13}}>Ranking de Sedes por Cumplimiento</div>
-          <div style={{color:"#7aab85",fontSize:11}}>{stats.totalSedes} sedes</div>
-        </div>
-        <div style={{background:C.sf,maxHeight:400,overflowY:"auto"}}>
-          <div style={{display:"grid",gridTemplateColumns:"40px 1fr 80px 100px 120px",gap:0,padding:"10px 18px",borderBottom:"1px solid "+C.bd,background:C.sa}}>
-            {["#","Sede","Empleados","Pol. Rojas","Cumplimiento"].map((h,i) => (
-              <span key={i} style={{fontSize:10,fontWeight:700,color:C.td,textTransform:"uppercase",letterSpacing:"0.4px"}}>{h}</span>
-            ))}
-          </div>
-          {[...stats.sedesCriticas,...stats.sedesOk].sort((a,b)=>a.cumplimiento-b.cumplimiento).map((s,i) => {
-            const pc = pctColor(s.cumplimiento);
-            return (
-              <div key={s.sede} style={{display:"grid",gridTemplateColumns:"40px 1fr 80px 100px 120px",gap:0,padding:"12px 18px",borderBottom:"1px solid "+C.bd,alignItems:"center"}}>
-                <span style={{width:26,height:26,borderRadius:7,background:pctBg(s.cumplimiento),display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,color:pc}}>{i+1}</span>
-                <span style={{fontSize:12,fontWeight:600,color:C.t,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingRight:8}}>{s.sede}</span>
-                <span style={{fontSize:12,color:C.tm}}>{s.empleados}</span>
-                <span style={{fontSize:12,fontWeight:s.polsRojas>0?700:400,color:s.polsRojas>0?C.dg:C.td}}>{s.polsRojas}</span>
-                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  <div style={{flex:1,height:6,borderRadius:3,background:"rgba(0,0,0,0.06)",overflow:"hidden"}}>
-                    <div style={{width:s.cumplimiento+"%",height:"100%",borderRadius:3,background:pc}} />
-                  </div>
-                  <span style={{fontSize:12,fontWeight:700,color:pc,minWidth:35}}>{s.cumplimiento}%</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function DashView({ marc: marcaciones = [], fact: facturas = [] }) {
-  const hasMarc = marcaciones.length > 0;
-  const hasFact = facturas.length > 0;
-
-  const filtrosDefault = {
-    sede: "Todas", seccion: "Todas", area: "Todas", clase: "Todas", mes: "Todos",
-    dsem: "Todos", semana: "Todas", dia: "Todos", quincena: "Todos"
-  };
-
-  const [filtros, setFiltros] = useState(filtrosDefault);
-  const [vistaActual, setVistaActual] = useState("ambos");
-  const [busqueda, setBusqueda] = useState("");
-  const [pagina, setPagina] = useState(0);
-  const REGISTROS_POR_PAGINA = 50;
-
-  /* Reset filtros cuando cambian los datos cargados */
-  useEffect(() => { setFiltros(filtrosDefault); setPagina(0); setBusqueda(""); }, [marcaciones.length, facturas.length]);
-
-  // -- Opciones dinamicas e INTELIGENTES: se acotan según los demás filtros activos --
-  const opcionesFiltros = useMemo(() => {
-    const ORD_MES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-    const ORD_DSEM = ["Lunes","Martes","Miercoles","Miércoles","Jueves","Viernes","Sabado","Sábado","Domingo"];
-
-    // Helper: filtrar marcaciones EXCEPTO por una clave dada (para mostrar opciones de esa clave)
-    const matchM = (m, exceptKey) => {
-      if (exceptKey !== "sede"    && filtros.sede    !== "Todas" && m.DEPENDENCIA !== filtros.sede) return false;
-      if (exceptKey !== "seccion" && filtros.seccion !== "Todas" && m.CENTROCOSTO !== filtros.seccion) return false;
-      if (exceptKey !== "mes"     && filtros.mes     !== "Todos" && m.MES         !== filtros.mes) return false;
-      if (exceptKey !== "dsem"    && filtros.dsem    !== "Todos" && m.DIA_SEMANA  !== filtros.dsem) return false;
-      if (exceptKey !== "semana"  && filtros.semana  !== "Todas" && m.SEMANA      !== filtros.semana) return false;
-      if (exceptKey !== "dia"     && filtros.dia     !== "Todos" && String(m.DIA) !== filtros.dia) return false;
-      if (exceptKey !== "quincena" && filtros.quincena !== "Todos") {
-        const qv = filtros.quincena === "Quincena" ? "Si" : "No";
-        if (m.QUINCENA !== qv) return false;
-      }
-      return true;
-    };
-    const matchF = (f, exceptKey) => {
-      if (exceptKey !== "sede"  && filtros.sede  !== "Todas" && f.sede  !== filtros.sede) return false;
-      if (exceptKey !== "clase" && filtros.clase !== "Todas" && f.clase !== filtros.clase) return false;
-      if (exceptKey !== "area"  && filtros.area  && filtros.area !== "Todas" && f.seccion !== filtros.area) return false;
-      if (exceptKey !== "mes"   && filtros.mes   !== "Todos" && f.mes   !== filtros.mes) return false;
-      if (exceptKey !== "dia"   && filtros.dia   !== "Todos" && String(f.dia) !== filtros.dia) return false;
-      if (exceptKey !== "dsem"  && filtros.dsem  !== "Todos" && f.dsem && f.dsem !== filtros.dsem) return false;
-      if (exceptKey !== "semana" && filtros.semana !== "Todas" && f.semana && f.semana !== filtros.semana) return false;
-      if (exceptKey !== "quincena" && filtros.quincena !== "Todos" && f.quincena) {
-        const qv = filtros.quincena === "Quincena" ? "Si" : "No";
-        if (f.quincena !== qv) return false;
-      }
-      return true;
-    };
-
-    // Recopilar valores únicos para cada filtro - los datos de marcaciones + facturas combinados
-    const recoger = (exceptKey, getM, getF) => {
-      const set = {};
-      marcaciones.forEach(m => { if (matchM(m, exceptKey)) { const v = getM(m); if (v != null && v !== "") set[v] = 1; } });
-      facturas.forEach(f => { if (matchF(f, exceptKey)) { const v = getF(f); if (v != null && v !== "") set[v] = 1; } });
-      return set;
-    };
-
-    const sedes      = recoger("sede",     m => m.DEPENDENCIA, f => f.sede);
-    const secciones  = recoger("seccion",  m => m.CENTROCOSTO, () => null);
-    const areas      = recoger("area",     () => null,         f => f.seccion);
-    const clases     = recoger("clase",    () => null,         f => f.clase);
-    const meses      = recoger("mes",      m => m.MES,         f => f.mes);
-    const dsems      = recoger("dsem",     m => m.DIA_SEMANA,  f => f.dsem);
-    const semanas    = recoger("semana",   m => m.SEMANA,      f => f.semana);
-    const dias       = recoger("dia",      m => String(m.DIA), f => f.dia != null && f.dia > 0 ? String(f.dia) : null);
-    const quincenas  = (() => {
-      const s = {};
-      marcaciones.forEach(m => { if (matchM(m, "quincena") && m.QUINCENA) s[m.QUINCENA === "Si" ? "Quincena" : "No Quincena"] = 1; });
-      facturas.forEach(f => { if (matchF(f, "quincena") && f.quincena) s[f.quincena === "Si" ? "Quincena" : "No Quincena"] = 1; });
-      return s;
-    })();
-
-    return {
-      sedes:      ["Todas", ...Object.keys(sedes).sort()],
-      secciones:  ["Todas", ...Object.keys(secciones).sort()],
-      areas:      ["Todas", ...Object.keys(areas).sort()],
-      clases:     ["Todas", ...Object.keys(clases).sort()],
-      meses:      ["Todos", ...Object.keys(meses).sort((a,b)=> ORD_MES.indexOf(a.toLowerCase().trim()) - ORD_MES.indexOf(b.toLowerCase().trim()))],
-      diasSemana: ["Todos", ...Object.keys(dsems).sort((a,b)=> ORD_DSEM.indexOf(a) - ORD_DSEM.indexOf(b))],
-      semanas:    ["Todas", ...Object.keys(semanas).sort()],
-      dias:       ["Todos", ...Object.keys(dias).sort((a, b) => (+a) - (+b))],
-      quincenasOpts: ["Todos", ...Object.keys(quincenas)],
-    };
-  }, [marcaciones, facturas, filtros]);
-
-  // Auto-reset de filtros que ya no aparecen en las opciones (e.g. seleccionaste día 20, luego quincena=primera)
-  useEffect(() => {
-    const fixes = {};
-    if (filtros.dia !== "Todos" && opcionesFiltros.dias.indexOf(filtros.dia) < 0) fixes.dia = "Todos";
-    if (filtros.dsem !== "Todos" && opcionesFiltros.diasSemana.indexOf(filtros.dsem) < 0) fixes.dsem = "Todos";
-    if (filtros.semana !== "Todas" && opcionesFiltros.semanas.indexOf(filtros.semana) < 0) fixes.semana = "Todas";
-    if (filtros.mes !== "Todos" && opcionesFiltros.meses.indexOf(filtros.mes) < 0) fixes.mes = "Todos";
-    if (filtros.seccion !== "Todas" && opcionesFiltros.secciones.indexOf(filtros.seccion) < 0) fixes.seccion = "Todas";
-    if (filtros.area && filtros.area !== "Todas" && opcionesFiltros.areas.indexOf(filtros.area) < 0) fixes.area = "Todas";
-    if (filtros.clase !== "Todas" && opcionesFiltros.clases.indexOf(filtros.clase) < 0) fixes.clase = "Todas";
-    if (Object.keys(fixes).length > 0) setFiltros(prev => ({...prev, ...fixes}));
-  }, [opcionesFiltros]);
-
-  // -- Marcaciones filtradas (para tabla) — un solo recorrido en vez de 7 filter encadenados --
-  const marcacionesFiltradas = useMemo(() => {
-    const quincenaVal = filtros.quincena !== "Todos" ? (filtros.quincena === "Quincena" ? "Si" : "No") : null;
-    const query = busqueda.trim().toLowerCase();
-
-    return marcaciones.filter((m) => {
-      if (filtros.sede    !== "Todas"  && m.DEPENDENCIA !== filtros.sede)    return false;
-      if (filtros.seccion !== "Todas"  && m.CENTROCOSTO !== filtros.seccion) return false;
-      if (filtros.mes     !== "Todos"  && m.MES         !== filtros.mes)     return false;
-      if (filtros.dsem    !== "Todos"  && m.DIA_SEMANA  !== filtros.dsem)    return false;
-      if (filtros.semana  !== "Todas"  && m.SEMANA      !== filtros.semana)  return false;
-      if (filtros.dia     !== "Todos"  && String(m.DIA) !== filtros.dia)     return false;
-      if (quincenaVal !== null         && m.QUINCENA    !== quincenaVal)     return false;
-      if (query) {
-        const emp  = m.EMPLEADO    ? m.EMPLEADO.toLowerCase()    : "";
-        const id   = m.IDENTIFICACION ? String(m.IDENTIFICACION) : "";
-        const dep  = m.DEPENDENCIA ? m.DEPENDENCIA.toLowerCase() : "";
-        const sec  = m.CENTROCOSTO ? m.CENTROCOSTO.toLowerCase() : "";
-        if (!emp.includes(query) && !id.includes(query) && !dep.includes(query) && !sec.includes(query)) return false;
-      }
-      return true;
-    });
-  }, [marcaciones, filtros, busqueda]);
-
-  // -- Datos del grafico --
-  const datosGrafico = useMemo(() => buildChart(marcaciones, facturas, filtros), [marcaciones, facturas, filtros]);
-
-  const hayDatosColab = datosGrafico.some((d) => d.colaboradores > 0);
-  const hayDatosTrans = datosGrafico.some((d) => d.transacciones > 0);
-
-  let tituloGrafico = "ANALISIS POR INTERVALO DE TIEMPO";
-  if (hayDatosColab && hayDatosTrans) tituloGrafico = "CURVA DE VENTA VS. NIVEL DE PERSONAL";
-  else if (hayDatosColab) tituloGrafico = "NIVEL DE PERSONAL POR HORA";
-  else if (hayDatosTrans) tituloGrafico = "CURVA DE TRANSACCIONES POR HORA";
-
-  // -- Estadisticas --
-  const estadisticas = useMemo(() => {
-    const empleadosUnicos = {}, fechasUnicas = {};
-    marcacionesFiltradas.forEach((m) => { empleadosUnicos[m.IDENTIFICACION] = 1; fechasUnicas[m.FECHA] = 1; });
-
-    const promedioHoras = marcacionesFiltradas.length > 0
-      ? (marcacionesFiltradas.reduce((sum, m) => sum + (m.TOTAL_HORAS || 0), 0) / marcacionesFiltradas.length).toFixed(1)
-      : "0";
-
-    let maxColaboradores = 0, maxTransacciones = 0, ventaTotal = 0;
-    datosGrafico.forEach((x) => { if (x.colaboradores > maxColaboradores) maxColaboradores = x.colaboradores; });
-    datosGrafico.forEach((x) => { if (x.transacciones > maxTransacciones) maxTransacciones = x.transacciones; });
-    const qVentaTotal = filtros.quincena !== "Todos" ? (filtros.quincena === "Quincena" ? "Si" : "No") : null;
-    facturas.forEach((f) => {
-      if (filtros.sede  !== "Todas" && f.sede    !== filtros.sede)  return;
-      if (filtros.clase !== "Todas" && f.clase   !== filtros.clase) return;
-      if (filtros.area  && filtros.area  !== "Todas" && f.seccion !== filtros.area)  return;
-      if (filtros.mes   !== "Todos" && f.mes     !== filtros.mes)   return;
-      if (filtros.dia   !== "Todos" && String(f.dia) !== filtros.dia) return;
-      if (filtros.dsem  !== "Todos" && f.dsem    && f.dsem    !== filtros.dsem)    return;
-      if (filtros.semana !== "Todas" && f.semana && f.semana !== filtros.semana)  return;
-      if (qVentaTotal !== null && f.quincena && f.quincena !== qVentaTotal) return;
-      ventaTotal += f.venta || 0;
-    });
-
-    return {
-      empleados: Object.keys(empleadosUnicos).length,
-      dias: Object.keys(fechasUnicas).length,
-      promedioHoras,
-      maxColaboradores: maxColaboradores.toFixed(0),
-      maxTransacciones: maxTransacciones.toFixed(0),
-      ventaTotal,
-    };
-  }, [marcacionesFiltradas, facturas, datosGrafico, filtros]);
-
-  // -- Helpers --
-  const aplicarFiltro = (clave, valor) => {
-    setPagina(0);
-    setFiltros((prev) => ({ ...prev, [clave]: valor }));
-  };
-
-  const limpiarTodo = () => { setFiltros(filtrosDefault); setBusqueda(""); setPagina(0); };
-
-  // -- Tarjetas de stats (dinamicas) --
-  const tarjetasStats = [];
-  if (hasMarc) {
-    tarjetasStats.push({ l: "Empleados", v: estadisticas.empleados, c: C.p, info: "Cantidad de empleados únicos con marcaciones en el período seleccionado." });
-    tarjetasStats.push({ l: "Prom Hrs/Dia", v: estadisticas.promedioHoras, c: C.s, info: "Promedio de horas trabajadas por empleado por día." });
-    tarjetasStats.push({ l: "Max Pers/Hora", v: estadisticas.maxColaboradores, c: C.ac, info: "Hora pico de personal: la mayor cantidad de empleados presentes simultáneamente en una franja horaria." });
-    tarjetasStats.push({ l: "Dias", v: estadisticas.dias, c: "#8b5cf6", info: "Cantidad de días con datos en el período seleccionado." });
-  }
-  if (hasFact) {
-    tarjetasStats.push({ l: "Max Trans/Hora", v: estadisticas.maxTransacciones, c: "#ec4899", info: "Hora pico de transacciones: mayor número de facturas registradas en una franja horaria." });
-    if (estadisticas.ventaTotal > 0) tarjetasStats.push({ l: "Venta Total", v: fmtMoney(estadisticas.ventaTotal), c: "#06b6d4", info: "Suma total de ventas del período, aplicando los filtros activos. K=miles, M=millones, MM=mil millones, B=billones." });
-  }
-
-  // -- Filtros visibles (dinamicos) --
-  const filtrosVisibles = [];
-  if (opcionesFiltros.sedes.length > 1) filtrosVisibles.push({ label: "Sede", key: "sede", opts: opcionesFiltros.sedes });
-  if (hasMarc && opcionesFiltros.secciones.length > 1) filtrosVisibles.push({ label: "Seccion", key: "seccion", opts: opcionesFiltros.secciones });
-  if (hasFact && opcionesFiltros.areas.length > 1) filtrosVisibles.push({ label: "Area", key: "area", opts: opcionesFiltros.areas });
-  if (hasFact && opcionesFiltros.clases.length > 1) filtrosVisibles.push({ label: "Clase", key: "clase", opts: opcionesFiltros.clases });
-  if (opcionesFiltros.meses.length > 1) filtrosVisibles.push({ label: "Mes", key: "mes", opts: opcionesFiltros.meses });
-  if (hasMarc) filtrosVisibles.push({ label: "DiaSem", key: "dsem", opts: opcionesFiltros.diasSemana });
-  if (hasMarc && opcionesFiltros.semanas.length > 1) filtrosVisibles.push({ label: "Semana", key: "semana", opts: opcionesFiltros.semanas });
-  if (opcionesFiltros.dias.length > 1) filtrosVisibles.push({ label: "Dia", key: "dia", opts: opcionesFiltros.dias });
-  if (hasMarc) filtrosVisibles.push({ label: "Quincena", key: "quincena", opts: ["Todos", "Quincena", "No Quincena"] });
-
-  // -- Paginacion --
-  const totalPaginas = Math.ceil(marcacionesFiltradas.length / REGISTROS_POR_PAGINA);
-  const marcacionesPagina = marcacionesFiltradas.slice(pagina * REGISTROS_POR_PAGINA, (pagina + 1) * REGISTROS_POR_PAGINA);
-
-  const mostrarGrafico = vistaActual === "grafico" || vistaActual === "ambos";
-  const mostrarTabla = vistaActual === "tabla" || vistaActual === "ambos";
-
-  const botonVista = (modo, texto) => {
-    const activo = vistaActual === modo;
-    return <button key={modo} onClick={() => setVistaActual(modo)} style={{padding:"7px 16px",borderRadius:9,fontSize:12,fontWeight:activo?700:500,background:activo?C.p:"transparent",border:"1.5px solid "+(activo?C.p:C.bd),color:activo?"#fff":C.tm,cursor:"pointer",transition:"all 0.2s",fontFamily:"'DM Sans',sans-serif",boxShadow:activo?"0 2px 8px rgba(26,122,46,0.2)":"none"}}>{texto}</button>;
-  };
-
-  const subtituloDatos = hasMarc && hasFact
-    ? "Marcaciones + Facturacion"
-    : hasMarc ? "Solo marcaciones - sube facturas para curva de venta"
-    : "Solo facturas - sube marcaciones para ver personal";
-
-  const tituloHeader = hayDatosColab && hayDatosTrans
-    ? "Curva de Venta vs. Personal"
-    : hayDatosColab ? "Personal por Hora"
-    : "Transacciones por Hora";
-
-  const columnasTabla = ["Empleado", "Sede", "Seccion", "Fecha", "Entrada", "Salida", "Jornada", "Quinc.", ...HC, "Total"];
-
-  return (
-    <div>
-      {/* Header + Toggle de vista */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
-        <div>
-          <h2 style={{color:C.t,fontSize:20,fontWeight:800,margin:0,fontFamily:"'DM Sans',sans-serif",letterSpacing:"-0.3px"}}>{tituloHeader}</h2>
-          <p style={{color:C.td,fontSize:12,margin:"4px 0 0"}}>{subtituloDatos}</p>
-        </div>
-        <div style={{display:"flex",gap:5,alignItems:"center"}}>
-          {botonVista("grafico", "Grafico")}
-          {botonVista("tabla", "Tabla")}
-          {botonVista("ambos", "Ambos")}
-          <button onClick={limpiarTodo} style={{padding:"7px 12px",borderRadius:9,fontSize:11,background:"transparent",border:"1.5px solid "+C.bd,color:C.td,cursor:"pointer",marginLeft:8,fontFamily:"'DM Sans',sans-serif",transition:"all 0.2s"}}>Limpiar</button>
-        </div>
-      </div>
-
-      {/* Filtros */}
-      {filtrosVisibles.length > 0 && (
-        <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:18}}>
-          <div style={{display:"flex",flexWrap:"wrap",gap:6,padding:"10px 14px",borderRadius:14,background:C.sf,border:"1px solid "+C.bd,boxShadow:"0 1px 4px rgba(0,0,0,0.03)"}}>
-            {filtrosVisibles.map((fp) => (
-              <Pill key={fp.key} label={fp.label} value={filtros[fp.key]} options={fp.opts} onChange={(v) => aplicarFiltro(fp.key, v)} />
-            ))}
-          </div>
-          {filtros.seccion !== "Todas" && hasFact && (
-            <div style={{padding:"6px 12px",borderRadius:10,background:"rgba(217,119,6,0.08)",border:"1px solid rgba(217,119,6,0.2)",color:"#92400e",fontSize:11}}>
-              ⓘ El filtro <strong>Sección</strong> sólo aplica a Personal (centro de costo del empleado). Las facturas se muestran sin este filtro. Para filtrar ventas por área usa <strong>Area</strong>.
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Tarjetas */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(155px,1fr))",gap:12,marginBottom:18}}>
-        {tarjetasStats.map((s, i) => (
-          <div key={i} style={{padding:"18px 16px",borderRadius:14,background:C.sf,border:"1px solid "+C.bd,position:"relative",overflow:"hidden",boxShadow:"0 2px 8px rgba(0,0,0,0.04)",transition:"box-shadow 0.2s,transform 0.2s"}}
-            onMouseEnter={function(e){e.currentTarget.style.boxShadow="0 4px 16px rgba(0,0,0,0.08)";e.currentTarget.style.transform="translateY(-1px)";}}
-            onMouseLeave={function(e){e.currentTarget.style.boxShadow="0 2px 8px rgba(0,0,0,0.04)";e.currentTarget.style.transform="translateY(0)";}}>
-            <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:"linear-gradient(90deg,"+s.c+","+s.c+"88)"}} />
-            <div style={{color:C.td,fontSize:10,fontWeight:600,marginBottom:8,marginTop:2,textTransform:"uppercase",letterSpacing:"0.5px",fontFamily:"'DM Sans',sans-serif"}}>
-              {s.info ? <InfoTip text={s.info}>{s.l}</InfoTip> : s.l}
-            </div>
-            <div style={{fontSize:28,fontWeight:800,color:s.c,lineHeight:1,fontFamily:"'DM Sans',sans-serif"}}>{s.v}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Grafico */}
-      {mostrarGrafico && (
-        <div style={{padding:"22px 24px",borderRadius:18,background:C.sf,border:"1px solid "+C.bd,marginBottom:mostrarTabla?18:0,boxShadow:"0 2px 12px rgba(0,0,0,0.04)"}}>
-          <h3 style={{color:C.t,fontSize:13,fontWeight:700,margin:"0 0 16px",fontFamily:"'DM Sans',sans-serif",letterSpacing:"-0.2px"}}>{tituloGrafico}</h3>
-          <ResponsiveContainer width="100%" height={340}>
-            <ComposedChart data={datosGrafico} margin={{top:10,right:25,left:0,bottom:10}}>
-              <CartesianGrid strokeDasharray="3 3" stroke={C.bd} />
-              <XAxis dataKey="hora" tick={{fill:C.tm,fontSize:9}} />
-              {hayDatosColab && <YAxis yAxisId="left" tick={{fill:C.tm,fontSize:9}} />}
-              {hayDatosTrans && <YAxis yAxisId="right" orientation={hayDatosColab ? "right" : "left"} tick={{fill:C.tm,fontSize:9}} />}
-              {!hayDatosColab && !hayDatosTrans && <YAxis yAxisId="left" tick={{fill:C.tm,fontSize:9}} />}
-              <Tooltip content={<Tip />} />
-              <Legend wrapperStyle={{fontSize:11}} />
-              {hayDatosColab && <Bar yAxisId="left" dataKey="colaboradores" name="Colaboradores" fill={C.bg2} radius={[3,3,0,0]} barSize={20} />}
-              {hayDatosTrans && <Line yAxisId="right" dataKey="transacciones" name="Transacciones" stroke={C.lg} strokeWidth={3} dot={{fill:C.lg,r:2}} type="monotone" />}
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* Tabla */}
-      {mostrarTabla && hasMarc && (
-        <div style={{padding:"22px 24px",borderRadius:18,background:C.sf,border:"1px solid "+C.bd,overflowX:"auto",boxShadow:"0 2px 12px rgba(0,0,0,0.04)"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
-            <h3 style={{color:C.t,fontSize:14,fontWeight:700,margin:0,fontFamily:"'DM Sans',sans-serif"}}>Tabla de Marcaciones <span style={{color:C.td,fontWeight:500,fontSize:12}}>({marcacionesFiltradas.length} registros)</span></h3>
-            <input
-              value={busqueda}
-              onChange={(e) => { setBusqueda(e.target.value); setPagina(0); }}
-              placeholder="Buscar empleado, sede, seccion..."
-              style={{padding:"9px 14px",borderRadius:10,fontSize:12,background:C.sa,border:"1.5px solid "+C.bd,color:C.t,outline:"none",width:280,boxSizing:"border-box",fontFamily:"'DM Sans',sans-serif",transition:"border-color 0.2s"}}
-            />
-          </div>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
-            <thead><tr>
-              {columnasTabla.map((h) => (
-                <th key={h} style={{padding:"8px 6px",textAlign:"left",color:C.td,fontWeight:700,borderBottom:"2px solid "+C.p+"22",whiteSpace:"nowrap",position:"sticky",top:0,background:C.sa,fontSize:10,textTransform:"uppercase",letterSpacing:"0.5px",fontFamily:"'DM Sans',sans-serif"}}>{h}</th>
-              ))}
-            </tr></thead>
-            <tbody>
-              {marcacionesPagina.map((m, i) => {
-                const fondoFila = i % 2 === 0 ? "transparent" : C.zebra;
-                return (
-                  <tr key={pagina * REGISTROS_POR_PAGINA + i} style={{background:fondoFila}}>
-                    <td style={{padding:4,color:C.t,whiteSpace:"nowrap",maxWidth:140,overflow:"hidden",textOverflow:"ellipsis"}} title={m.EMPLEADO}>{m.EMPLEADO}</td>
-                    <td style={{padding:4,color:C.tm,whiteSpace:"nowrap"}}>{m.DEPENDENCIA}</td>
-                    <td style={{padding:4,color:C.tm,whiteSpace:"nowrap"}}>{m.CENTROCOSTO}</td>
-                    <td style={{padding:4,color:C.tm}}>{m.FECHA}</td>
-                    <td style={{padding:4,color:C.p,fontWeight:600}}>{m.ENTRADA_H}</td>
-                    <td style={{padding:4,color:C.dg,fontWeight:600}}>{m.SALIDA_H}</td>
-                    <td style={{padding:4,color:C.tm}}>{m.TIPO_JORNADA}</td>
-                    <td style={{padding:4,color:m.QUINCENA==="Si"?C.ac:C.td,fontWeight:m.QUINCENA==="Si"?600:400,fontSize:9}}>{m.QUINCENA === "Si" ? "QNC" : "-"}</td>
-                    {HC.map((h) => (
-                      <td key={h} style={{padding:"3px 2px",textAlign:"center",background:m[h]===1?C.gridHi:"transparent",color:m[h]===1?C.p:C.td,fontWeight:m[h]===1?700:400}}>{m[h]}</td>
-                    ))}
-                    <td style={{padding:4,color:C.w,fontWeight:600}}>{m.TOTAL_HORAS}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-
-          {totalPaginas > 1 && (
-            <div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:6,marginTop:12}}>
-              <button onClick={() => setPagina(Math.max(0, pagina - 1))} disabled={pagina === 0} style={{padding:"5px 10px",borderRadius:6,fontSize:11,background:pagina===0?C.bg:C.sa,border:"1px solid "+C.bd,color:pagina===0?C.td:C.t,cursor:pagina===0?"default":"pointer"}}>Anterior</button>
-              <span style={{color:C.tm,fontSize:11}}>Pag {pagina + 1} de {totalPaginas}</span>
-              <button onClick={() => setPagina(Math.min(totalPaginas - 1, pagina + 1))} disabled={pagina >= totalPaginas - 1} style={{padding:"5px 10px",borderRadius:6,fontSize:11,background:pagina>=totalPaginas-1?C.bg:C.sa,border:"1px solid "+C.bd,color:pagina>=totalPaginas-1?C.td:C.t,cursor:pagina>=totalPaginas-1?"default":"pointer"}}>Siguiente</button>
-              <span style={{color:C.td,fontSize:10,marginLeft:8}}>{REGISTROS_POR_PAGINA} por pagina</span>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* === COMPONENT: PARAM INPUT === */
-function ParamInput({ label, value, onChange, tipo, ayuda }) {
-  return (
-    <div style={{marginBottom:8}}>
-      <label style={{color:C.tm,fontSize:10,fontWeight:600,display:"block",marginBottom:3}}>{label}</label>
-      {tipo === "text" ? (
-        <input value={value} onChange={(e) => onChange(e.target.value)}
-          style={{width:"100%",padding:"6px 8px",borderRadius:6,fontSize:12,background:C.bg,border:"1px solid "+C.bd,color:C.t,outline:"none",boxSizing:"border-box"}} />
-      ) : (
-        <input type="number" value={value} onChange={(e) => onChange(Number(e.target.value))}
-          style={{width:"100%",padding:"6px 8px",borderRadius:6,fontSize:12,background:C.bg,border:"1px solid "+C.bd,color:C.t,outline:"none",boxSizing:"border-box"}} />
-      )}
-      {ayuda && <span style={{color:C.td,fontSize:9,marginTop:1,display:"block"}}>{ayuda}</span>}
-    </div>
-  );
-}
-
-/* === POLICIES VIEW === */
-/* INFORME: ANOTACIONES POR NIVEL */
-function getAnotacion(cumplimiento, nombre) {
-  if (cumplimiento >= 95) return {
-    anotacion: "Excelente resultado. El equipo demuestra un alto nivel de disciplina y compromiso con la politica de " + nombre + ". Este logro refleja una gestion operativa solida.",
-    recomendacion: "Reconocer al equipo. Mantener los controles actuales y reforzar la induccion al nuevo personal para que adopten esta cultura.",
-    prioridad: "Baja", color: "#7dd105"
-  };
-  if (cumplimiento >= 80) return {
-    anotacion: "Buen nivel con oportunidades de mejora puntuales. Los casos de incumplimiento son aislados y corregibles con seguimiento focalizado.",
-    recomendacion: "Identificar colaboradores puntuales en incumplimiento y realizar acompanamiento individual. Verificar si las causas son operativas o de desconocimiento.",
-    prioridad: "Media", color: "#f59e0b"
-  };
-  if (cumplimiento >= 50) return {
-    anotacion: "El nivel de incumplimiento es significativo y requiere atencion inmediata. Se evidencia una desviacion importante de los estandares.",
-    recomendacion: "Activar plan de correccion centrado en causas raiz. Supervision mas constante y capacitacion obligatoria al equipo.",
-    prioridad: "Alta", color: "#ef4444"
-  };
-  return {
-    anotacion: "Incumplimiento critico que sugiere una falla severa en la gestion. Se requiere acompanamiento urgente y medidas correctivas inmediatas.",
-    recomendacion: "Plan de Accion con seguimiento diario. Capacitacion obligatoria inmediata. Redistribuir cargas y evaluar refuerzo de personal.",
-    prioridad: "Critica", color: "#ef4444"
-  };
-}
-
-/* INFORME VIEW (React puro, sin HTML strings) */
-function InformeView({ politicas, totalEmpleados, sede, mes, parametros, marcaciones, userName, onCerrar }) {
-  const mesesNombres = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-  const hoy = new Date();
-  const fechaEmision = hoy.getDate() + " de " + mesesNombres[hoy.getMonth()].toLowerCase() + " del " + hoy.getFullYear();
-
-  // Usar el mes seleccionado si está filtrado, si no detectar el más frecuente
-  let mesNombre;
-  if (mes && mes !== "Todos") {
-    mesNombre = mes.charAt(0).toUpperCase() + mes.slice(1);
-  } else {
-    const mesesData = {};
-    marcaciones.forEach((m) => { if (m.MES) mesesData[m.MES] = (mesesData[m.MES] || 0) + 1; });
-    const mesTop = Object.entries(mesesData).sort((a, b) => b[1] - a[1])[0];
-    mesNombre = mesTop ? mesTop[0].charAt(0).toUpperCase() + mesTop[0].slice(1) : mesesNombres[hoy.getMonth()];
-  }
-
-  const promedio = politicas.length ? Math.round(politicas.reduce((s, p) => s + p.cumplimiento, 0) / politicas.length) : 0;
-
-  const descargarPDF = () => {
-    const pctColor = (c) => c >= 90 ? "#16a34a" : c >= 70 ? "#d97706" : "#dc2626";
-
-    const politicasHTML = politicas.map((pol) => {
-      const info = getAnotacion(pol.cumplimiento, pol.nombre.toLowerCase());
-      const pctInc = (100 - pol.cumplimiento).toFixed(1);
-      const pc = pctColor(pol.cumplimiento);
-
-      const unicosMap = {};
-      pol.violadores.forEach((v) => {
-        if (!unicosMap[v.id]) unicosMap[v.id] = { nombre: v.nombre, cargo: v.cargo, count: 0 };
-        unicosMap[v.id].count++;
-      });
-      const topV = Object.values(unicosMap).sort((a, b) => b.count - a.count).slice(0, 5);
-
-      const topVHTML = topV.length > 0 ? `
-        <table class="tbl" style="margin-bottom:8px"><tbody>
-          <tr><td colspan="2" class="tdWarn">Colaboradores con mayor incidencia</td></tr>
-          ${topV.map(v => `<tr><td class="tdL">${v.nombre} (${v.cargo})</td><td class="tdR">${v.count} evento(s)</td></tr>`).join("")}
-        </tbody></table>` : "";
-
-      return `
-        <div class="pol-block">
-          <div class="polH">${pol.num}. ${pol.nombre.toUpperCase()}</div>
-          <div class="polD">${pol.desc}</div>
-          <table class="tbl"><tbody>
-            <tr><td class="tdL">Total de colaboradores evaluados</td><td class="tdR">${totalEmpleados}</td></tr>
-            <tr><td class="tdL">Colaboradores en incumplimiento</td><td class="tdR">${pol.empleadosAfectados}</td></tr>
-            <tr><td class="tdL">% de Incumplimiento</td><td class="tdR" style="color:${pc}">${pctInc}%</td></tr>
-            <tr><td class="tdL">Total de violaciones registradas</td><td class="tdR">${pol.totalViolaciones}</td></tr>
-            <tr><td class="tdL">Cumplimiento</td><td class="tdR" style="color:${pc}">${pol.cumplimiento}%</td></tr>
-          </tbody></table>
-          ${topVHTML}
-          <div class="nota"><b class="label">ANOTACION:</b><br/>${info.anotacion}</div>
-          <div class="reco"><b class="label">RECOMENDACION:</b><br/>${info.recomendacion}</div>
-        </div>`;
-    }).join("");
-
-    const semaforoHTML = politicas.map((pol) => {
-      const info = getAnotacion(pol.cumplimiento, pol.nombre);
-      return `<tr>
-        <td class="semTd">${pol.nombre}</td>
-        <td class="semTd"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${info.color};vertical-align:middle;margin-right:6px"></span>${pol.cumplimiento}%</td>
-        <td class="semTd">${info.prioridad}</td>
-      </tr>`;
-    }).join("");
-
-    const html = `<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8"/>
-  <title>Reporte Seguimiento App - ${mesNombre}</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #1a1a1a; background: #fff; }
-    .page { max-width: 820px; margin: 0 auto; padding: 40px; }
-    h1 { text-align:center; font-size:17pt; color:#1C5A2A; margin-bottom:4px; letter-spacing:1px; }
-    h2 { text-align:center; font-size:13pt; color:#4a4a4a; font-weight:400; margin-bottom:18px; }
-    h3.secH { color:#1C5A2A; font-size:13pt; border-bottom:2px solid #1C5A2A; padding-bottom:4px; margin-top:25px; margin-bottom:10px; }
-    .meta p { margin: 2px 0; font-size:11pt; }
-    .meta b { color:#1C5A2A; }
-    .intro { text-align:justify; margin-bottom:22px; font-size:10.5pt; color:#333; border-left:3px solid #1C5A2A; padding-left:12px; line-height:1.6; }
-    .polH { background:#1C5A2A; color:#fff; padding:8px 14px; font-size:12.5pt; font-weight:700; margin-top:22px; border-radius:4px 4px 0 0; }
-    .polD { background:#e8eef5; padding:6px 14px; font-size:9.5pt; color:#4a4a4a; margin-bottom:10px; border-radius:0 0 4px 4px; font-style:italic; }
-    .tbl { width:100%; border-collapse:collapse; margin-bottom:10px; font-size:10.5pt; }
-    .tbl td, .tbl th { padding:5px 10px; border:1px solid #ccc; }
-    .tdL { background:#f5f7fa; font-weight:500; width:60%; }
-    .tdR { text-align:center; font-weight:700; }
-    .tdWarn { background:#fff3cd; text-align:center; font-size:9pt; font-weight:600; }
-    .semTh { background:#1C5A2A; color:#fff; padding:7px; text-align:left; font-size:10pt; }
-    .semTd { padding:5px 10px; border:1px solid #ccc; font-size:10.5pt; }
-    .nota { background:#f0f9ff; border-left:3px solid #3b82f6; padding:8px 12px; margin-bottom:8px; font-size:10pt; line-height:1.5; }
-    .reco { background:#fefce8; border-left:3px solid #f59e0b; padding:8px 12px; margin-bottom:18px; font-size:10pt; line-height:1.5; }
-    .label { font-size:9pt; text-transform:uppercase; letter-spacing:0.5px; font-weight:700; }
-    .firma-line { border-bottom:1px solid #333; width:280px; display:inline-block; margin-left:8px; }
-    .print-btn { display:block; margin:0 auto 20px; padding:10px 28px; background:#1C5A2A; color:#fff; border:none; border-radius:8px; font-size:12pt; cursor:pointer; font-family:inherit; }
-    @media print {
-      .print-btn { display:none !important; }
-      body { font-size:10pt; }
-      .page { padding:0; }
-      @page { margin:15mm; size:A4; }
-    }
-  </style>
-</head>
-<body>
-  <div class="page">
-    <button class="print-btn" onclick="window.print()">🖨️ Imprimir / Guardar como PDF</button>
-    <h1>REPORTE MENSUAL DE CUMPLIMIENTO</h1>
-    <h2>Politica de Horarios y Marcaciones</h2>
-    <div class="meta" style="margin-bottom:18px">
-      <p><b>Sede:</b> ${sede === "Todas" ? "TODAS LAS SEDES" : sede}</p>
-      <p><b>Mes de Reporte:</b> ${mesNombre}</p>
-      <p><b>Fecha de Emision:</b> ${fechaEmision}</p>
-      <p><b>Cumplimiento General:</b> <span style="font-size:15pt;font-weight:700;color:${pctColor(promedio)}">${promedio}%</span></p>
-    </div>
-    <div class="intro">
-      El presente reporte consolida el cumplimiento de la politica de horarios del personal durante el periodo evaluado.
-      Se evaluaron <b>${totalEmpleados}</b> colaboradores (jornada normal: ${parametros.jornadaNormal}h, max dia: ${parametros.jornadaMaxDia}h,
-      break min: ${parametros.breakMinimoMin}min, HE max/dia: ${parametros.horasExtraMaxDia}h, HE max/sem: ${parametros.horasExtraMaxSemana}h).
-    </div>
-    <h3 class="secH">INDICADORES DE CUMPLIMIENTO</h3>
-    ${politicasHTML}
-    <h3 class="secH">SEMAFORO DE CUMPLIMIENTO GENERAL</h3>
-    <table class="tbl"><thead><tr>
-      <th class="semTh">Indicador</th><th class="semTh">Estado</th><th class="semTh">Prioridad</th>
-    </tr></thead><tbody>${semaforoHTML}</tbody></table>
-    <h3 class="secH">PLAN DE ACCION SUGERIDO</h3>
-    <ol style="font-size:10.5pt;padding-left:25px;line-height:1.8">
-      <li>Identificar colaboradores recurrentes en multiples indicadores de riesgo</li>
-      <li>Revisar programacion de turnos para el proximo periodo</li>
-      <li>Verificar causas raiz de jornadas extendidas y breaks irregulares</li>
-      <li>Implementar mejoras en la planificacion de horarios</li>
-      <li>Capacitar a supervisores en registro correcto de marcaciones</li>
-      <li>Redistribuir cargas de trabajo para equilibrar jornadas</li>
-    </ol>
-    <h3 class="secH">OBSERVACIONES Y COMENTARIOS</h3>
-    <div style="border:1px solid #ccc;min-height:70px;padding:10px;border-radius:4px;color:#999;font-size:10pt">
-      [Espacio para comentarios del administrador de tienda]
-    </div>
-    <div style="margin-top:35px">
-      <h3 class="secH">COMPROMISOS Y SEGUIMIENTO</h3>
-      <p style="margin:3px 0;font-size:10.5pt"><b>Administrador de Tienda:</b></p>
-      <p style="margin:8px 0;font-size:10.5pt">Nombre: <span class="firma-line"></span></p>
-      <p style="margin:8px 0;font-size:10.5pt">Firma: <span class="firma-line"></span></p>
-      <p style="margin:8px 0;font-size:10.5pt">Fecha: <span class="firma-line"></span></p>
-      <p style="margin:14px 0 0;font-size:10.5pt"><b>Proxima revision:</b> [DD/MM/AAAA]</p>
-    </div>
-    <div style="margin-top:30px;padding:12px 18px;border-top:2px solid #1C5A2A;text-align:center">
-      <p style="font-size:8.5pt;color:#888;margin:0;letter-spacing:0.3px">DOCUMENTO CONFIDENCIAL — Generado por <b>${userName || "Usuario"}</b> el <b>${fechaEmision}</b> mediante Seguimiento App · Supertiendas Cañaveral S.A.</p>
-      <p style="font-size:7.5pt;color:#aaa;margin:4px 0 0">Prohibida su reproducción o distribución sin autorización. Este documento contiene información sensible de gestión de personal.</p>
-    </div>
-  </div>
-</body>
-</html>`;
-
-    try {
-      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `SeguimientoApp_Reporte_${mesNombre}_${sede !== "Todas" ? sede + "_" : ""}${new Date().toISOString().slice(0,10)}.html`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch(e) { alert("Error al descargar informe: " + e.message); }
-  };
-
-  const S = {
-    page: { fontFamily:"Calibri,Arial,sans-serif", fontSize:11, color:"#1a1a1a", lineHeight:"1.5", maxWidth:820, margin:"0 auto", padding:40, background:"#fff" },
-    h1: { textAlign:"center", fontSize:17, color:"#1C5A2A", margin:"0 0 4px", letterSpacing:1, fontWeight:700 },
-    h2: { textAlign:"center", fontSize:13, color:"#4a4a4a", fontWeight:400, margin:"0 0 18px" },
-    metaP: { margin:"2px 0", fontSize:11 },
-    metaB: { color:"#1C5A2A" },
-    intro: { textAlign:"justify", marginBottom:22, fontSize:10.5, color:"#333", borderLeft:"3px solid #1C5A2A", paddingLeft:12 },
-    polH: { background:"#1C5A2A", color:"#fff", padding:"8px 14px", fontSize:12.5, fontWeight:700, margin:"22px 0 0", borderRadius:"4px 4px 0 0" },
-    polD: { background:"#e8eef5", padding:"6px 14px", fontSize:9.5, color:"#4a4a4a", margin:"0 0 10px", borderRadius:"0 0 4px 4px", fontStyle:"italic" },
-    tbl: { width:"100%", borderCollapse:"collapse", marginBottom:10, fontSize:10.5 },
-    tdL: { padding:"5px 10px", border:"1px solid #ccc", background:"#f5f7fa", fontWeight:500, width:"60%" },
-    tdR: { padding:"5px 10px", border:"1px solid #ccc", textAlign:"center", fontWeight:700 },
-    tdWarn: { padding:"5px 10px", border:"1px solid #ccc", background:"#fff3cd", textAlign:"center", fontSize:9, fontWeight:600 },
-    nota: { background:"#f0f9ff", borderLeft:"3px solid #3b82f6", padding:"8px 12px", marginBottom:8, fontSize:10 },
-    reco: { background:"#fefce8", borderLeft:"3px solid #f59e0b", padding:"8px 12px", marginBottom:18, fontSize:10 },
-    label: { fontSize:9, textTransform:"uppercase", letterSpacing:0.5, fontWeight:700 },
-    secH: { color:"#1C5A2A", fontSize:14, borderBottom:"2px solid #1C5A2A", paddingBottom:4, marginTop:25 },
-    semTh: { background:"#1C5A2A", color:"#fff", padding:7, textAlign:"left", fontSize:10 },
-    semTd: { padding:"5px 10px", border:"1px solid #ccc", fontSize:10.5 },
-    dot: (c) => ({ display:"inline-block", width:13, height:13, borderRadius:"50%", background:c, verticalAlign:"middle", marginRight:6 }),
-    firmaLine: { borderBottom:"1px solid #333", width:280, display:"inline-block", marginLeft:8 },
-  };
-
-  const pctColor = (c) => c >= 90 ? "#16a34a" : c >= 70 ? "#d97706" : "#dc2626";
-
-  return (
-    <div id="seguimiento-informe-print" style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9999,background:"rgba(0,0,0,0.92)",display:"flex",flexDirection:"column",alignItems:"center",overflow:"auto"}}>
-      <div className="informe-toolbar" style={{position:"sticky",top:0,zIndex:10,display:"flex",gap:8,padding:"10px 0",background:"rgba(0,0,0,0.8)",width:"100%",justifyContent:"center"}}>
-        <button onClick={descargarPDF} style={{padding:"8px 20px",borderRadius:8,fontSize:12,fontWeight:600,background:"linear-gradient(135deg,#1C5A2A,#7dd105)",border:"none",color:"#fff",cursor:"pointer",boxShadow:"0 2px 8px rgba(28,90,42,0.4)"}}>⬇ Descargar PDF</button>
-        <button onClick={onCerrar} style={{padding:"8px 20px",borderRadius:8,fontSize:12,fontWeight:500,background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.3)",color:"#fca5a5",cursor:"pointer"}}>Cerrar Informe</button>
-      </div>
-
-      <div className="informe-page" style={S.page}>
-        <h1 style={S.h1}>REPORTE MENSUAL DE CUMPLIMIENTO</h1>
-        <h2 style={S.h2}>Politica de Horarios y Marcaciones</h2>
-
-        <div style={{marginBottom:18}}>
-          <p style={S.metaP}><b style={S.metaB}>Sede:</b> {sede === "Todas" ? "TODAS LAS SEDES" : sede}</p>
-          <p style={S.metaP}><b style={S.metaB}>Mes de Reporte:</b> {mesNombre}</p>
-          <p style={S.metaP}><b style={S.metaB}>Fecha de Emision:</b> {fechaEmision}</p>
-          <p style={S.metaP}><b style={S.metaB}>Cumplimiento General:</b> <span style={{fontSize:15,fontWeight:700,color:pctColor(promedio)}}>{promedio}%</span></p>
-        </div>
-
-        <div style={S.intro}>
-          El presente reporte consolida el cumplimiento de la politica de horarios del personal durante el periodo evaluado.
-          Se evaluaron <b>{totalEmpleados}</b> colaboradores (jornada normal: {parametros.jornadaNormal}h, max dia: {parametros.jornadaMaxDia}h, break min: {parametros.breakMinimoMin}min, HE max/dia: {parametros.horasExtraMaxDia}h, HE max/sem: {parametros.horasExtraMaxSemana}h).
-        </div>
-
-        <h3 style={S.secH}>INDICADORES DE CUMPLIMIENTO</h3>
-
-        {politicas.map((pol) => {
-          const info = getAnotacion(pol.cumplimiento, pol.nombre.toLowerCase());
-          const pctInc = 100 - pol.cumplimiento;
-          const pc = pctColor(pol.cumplimiento);
-
-          const unicosMap = {};
-          pol.violadores.forEach((v) => { if (!unicosMap[v.id]) unicosMap[v.id] = { nombre: v.nombre, cargo: v.cargo, count: 0 }; unicosMap[v.id].count++; });
-          const topV = Object.values(unicosMap).sort((a, b) => b.count - a.count).slice(0, 5);
-
-          return (
-            <div key={pol.id}>
-              <div style={S.polH}>{pol.num}. {pol.nombre.toUpperCase()}</div>
-              <div style={S.polD}>{pol.desc}</div>
-              <table style={S.tbl}><tbody>
-                <tr><td style={S.tdL}>Total de colaboradores evaluados</td><td style={S.tdR}>{totalEmpleados}</td></tr>
-                <tr><td style={S.tdL}>Colaboradores en incumplimiento</td><td style={S.tdR}>{pol.empleadosAfectados}</td></tr>
-                <tr><td style={S.tdL}>% de Incumplimiento</td><td style={{...S.tdR,color:pc}}>{pctInc.toFixed(1)}%</td></tr>
-                <tr><td style={S.tdL}>Total de violaciones registradas</td><td style={S.tdR}>{pol.totalViolaciones}</td></tr>
-                <tr><td style={S.tdL}>Cumplimiento</td><td style={{...S.tdR,color:pc}}>{pol.cumplimiento}%</td></tr>
-              </tbody></table>
-
-              {topV.length > 0 && (
-                <table style={{...S.tbl,marginBottom:8}}><tbody>
-                  <tr><td colSpan={2} style={S.tdWarn}>Colaboradores con mayor incidencia</td></tr>
-                  {topV.map((v, i) => <tr key={i}><td style={S.tdL}>{v.nombre} ({v.cargo})</td><td style={S.tdR}>{v.count} evento(s)</td></tr>)}
-                </tbody></table>
-              )}
-
-              <div style={S.nota}><b style={S.label}>Anotacion:</b><br/>{info.anotacion}</div>
-              <div style={S.reco}><b style={S.label}>Recomendacion:</b><br/>{info.recomendacion}</div>
-            </div>
-          );
-        })}
-
-        <h3 style={S.secH}>SEMAFORO DE CUMPLIMIENTO GENERAL</h3>
-        <table style={S.tbl}><thead><tr>
-          <th style={S.semTh}>Indicador</th><th style={S.semTh}>Estado</th><th style={S.semTh}>Prioridad</th>
-        </tr></thead><tbody>
-          {politicas.map((pol) => {
-            const info = getAnotacion(pol.cumplimiento, pol.nombre);
-            return (<tr key={pol.id}>
-              <td style={S.semTd}>{pol.nombre}</td>
-              <td style={S.semTd}><span style={S.dot(info.color)} />{pol.cumplimiento}%</td>
-              <td style={S.semTd}>{info.prioridad}</td>
-            </tr>);
-          })}
-        </tbody></table>
-
-        <h3 style={S.secH}>PLAN DE ACCION SUGERIDO</h3>
-        <ol style={{fontSize:10.5,paddingLeft:25}}>
-          <li style={{marginBottom:4}}>Identificar colaboradores recurrentes en multiples indicadores de riesgo</li>
-          <li style={{marginBottom:4}}>Revisar programacion de turnos para el proximo periodo</li>
-          <li style={{marginBottom:4}}>Verificar causas raiz de jornadas extendidas y breaks irregulares</li>
-          <li style={{marginBottom:4}}>Implementar mejoras en la planificacion de horarios</li>
-          <li style={{marginBottom:4}}>Capacitar a supervisores en registro correcto de marcaciones</li>
-          <li style={{marginBottom:4}}>Redistribuir cargas de trabajo para equilibrar jornadas</li>
-        </ol>
-
-        <h3 style={S.secH}>OBSERVACIONES Y COMENTARIOS</h3>
-        <div style={{border:"1px solid #ccc",minHeight:70,padding:10,borderRadius:4,color:"#999",fontSize:10}}>
-          [Espacio para comentarios del administrador de tienda]
-        </div>
-
-        <div style={{marginTop:35}}>
-          <h3 style={S.secH}>COMPROMISOS Y SEGUIMIENTO</h3>
-          <p style={{margin:"3px 0",fontSize:10.5}}><b>Administrador de Tienda:</b></p>
-          <p style={{margin:"3px 0",fontSize:10.5}}>Nombre: <span style={S.firmaLine} /></p>
-          <p style={{margin:"3px 0",fontSize:10.5}}>Firma: <span style={S.firmaLine} /></p>
-          <p style={{margin:"3px 0",fontSize:10.5}}>Fecha: <span style={S.firmaLine} /></p>
-          <p style={{margin:"12px 0 0",fontSize:10.5}}><b>Proxima revision:</b> [DD/MM/AAAA]</p>
-        </div>
-
-        <div style={{marginTop:30,padding:"12px 18px",borderTop:"2px solid #1C5A2A",textAlign:"center"}}>
-          <p style={{fontSize:8.5,color:"#888",margin:0,letterSpacing:"0.3px"}}>DOCUMENTO CONFIDENCIAL — Generado por <b>{userName || "Usuario"}</b> el <b>{fechaEmision}</b> mediante Seguimiento App · Supertiendas Cañaveral S.A.</p>
-          <p style={{fontSize:7.5,color:"#aaa",margin:"4px 0 0"}}>Prohibida su reproducción o distribución sin autorización.</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PolView({ marc: marcaciones = [], parametros, setParametros, userName }) {
-  const [mostrarConfig, setMostrarConfig] = useState(false);
-  const polFiltrosDefault = {
-    sede: "Todas", seccion: "Todas", clase: "Todas", mes: "Todos",
-    dsem: "Todos", semana: "Todas", dia: "Todos", quincena: "Todos"
-  };
-  const [polFiltros, setPolFiltros] = useState(polFiltrosDefault);
-  // Aliases retrocompatibles (usados en titulos, exports, informe)
-  const sedeSel = polFiltros.sede;
-  const mesSel = polFiltros.mes;
-  const setPolFiltro = (campo, valor) => setPolFiltros(f => ({...f, [campo]: valor}));
-  const [polSeleccionada, setPolSeleccionada] = useState(null);
-  const [mostrarInforme, setMostrarInforme] = useState(false);
-  const [busquedaPol, setBusquedaPol] = useState("");
-  const [paginaPol, setPaginaPol] = useState(0);
-  const [mostrarModalExcel, setMostrarModalExcel] = useState(false);
-  const [polsParaExcel, setPolsParaExcel] = useState(null); // null = no iniciado
-  const VIOL_POR_PAGINA = 30;
-
-  // Opciones dinámicas de los 8 filtros de Políticas
-  const opcionesPolFiltros = useMemo(() => {
-    const ORDEN_MES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-    const ORDEN_DSEM = ["Lunes","Martes","Miercoles","Miércoles","Jueves","Viernes","Sabado","Sábado","Domingo"];
-    const sets = {sede:{}, seccion:{}, clase:{}, mes:{}, dsem:{}, semana:{}, dia:{}, quincena:{}};
-    marcaciones.forEach(m => {
-      if (m.DEPENDENCIA) sets.sede[m.DEPENDENCIA] = 1;
-      if (m.CENTROCOSTO) sets.seccion[m.CENTROCOSTO] = 1;
-      if (m.CLASE)       sets.clase[m.CLASE] = 1;
-      if (m.MES)         sets.mes[m.MES] = 1;
-      if (m.DIA_SEMANA)  sets.dsem[m.DIA_SEMANA] = 1;
-      if (m.SEMANA)      sets.semana[m.SEMANA] = 1;
-      if (m.DIA)         sets.dia[String(m.DIA)] = 1;
-      if (m.QUINCENA !== undefined && m.QUINCENA !== null) {
-        const q = String(m.QUINCENA).toLowerCase();
-        if (q === "si" || q === "true" || m.QUINCENA === true || m.QUINCENA === 1) sets.quincena["Quincena"] = 1;
-        else sets.quincena["No Quincena"] = 1;
-      }
-    });
-    const ord = (arr, comparator) => comparator ? arr.sort(comparator) : arr.sort();
-    return {
-      sedes:    ["Todas",...ord(Object.keys(sets.sede))],
-      secciones:["Todas",...ord(Object.keys(sets.seccion))],
-      clases:   ["Todas",...ord(Object.keys(sets.clase))],
-      meses:    ["Todos",...ord(Object.keys(sets.mes), (a,b)=> ORDEN_MES.indexOf(a.toLowerCase().trim())-ORDEN_MES.indexOf(b.toLowerCase().trim()))],
-      dsems:    ["Todos",...ord(Object.keys(sets.dsem), (a,b)=> ORDEN_DSEM.indexOf(a)-ORDEN_DSEM.indexOf(b))],
-      semanas:  ["Todas",...ord(Object.keys(sets.semana))],
-      dias:     ["Todos",...ord(Object.keys(sets.dia), (a,b)=> Number(a)-Number(b))],
-      quincenas:["Todos",...Object.keys(sets.quincena)],
-    };
-  }, [marcaciones]);
-
-  // Listas legacy (otros lugares las usan por nombre)
-  const sedes = opcionesPolFiltros.sedes;
-  const meses = opcionesPolFiltros.meses;
-
-  // Filtros "estructurales" (no rompen agregaciones por semana/mes): sede, seccion, clase, mes
-  // Filtros "granulares" (rompen agregaciones): dsem, semana, dia, quincena
-  // Aplicamos ambos a politicas DIARIAS, pero solo los estructurales a politicas SEMANA/MES
-  const aplicaEstructurales = (m) => {
-    if (polFiltros.sede    !== "Todas" && m.DEPENDENCIA !== polFiltros.sede)   return false;
-    if (polFiltros.seccion !== "Todas" && m.CENTROCOSTO !== polFiltros.seccion) return false;
-    if (polFiltros.clase   !== "Todas" && m.CLASE       !== polFiltros.clase)   return false;
-    if (polFiltros.mes     !== "Todos" && m.MES         !== polFiltros.mes)     return false;
-    return true;
-  };
-  const aplicaGranulares = (m) => {
-    if (polFiltros.dsem    !== "Todos" && m.DIA_SEMANA  !== polFiltros.dsem)    return false;
-    if (polFiltros.semana  !== "Todas" && m.SEMANA      !== polFiltros.semana)  return false;
-    if (polFiltros.dia     !== "Todos" && String(m.DIA) !== polFiltros.dia)     return false;
-    if (polFiltros.quincena !== "Todos") {
-      const esQuin = (m.QUINCENA === true || m.QUINCENA === 1 || String(m.QUINCENA).toLowerCase() === "si" || String(m.QUINCENA).toLowerCase() === "true");
-      if (polFiltros.quincena === "Quincena" && !esQuin) return false;
-      if (polFiltros.quincena === "No Quincena" && esQuin) return false;
-    }
-    return true;
-  };
-
-  // Set para evaluacion de politicas DIARIAS (todos los filtros aplicados)
-  const marcacionesFiltradas = useMemo(() => {
-    return marcaciones.filter(m => aplicaEstructurales(m) && aplicaGranulares(m));
-  }, [marcaciones, polFiltros]);
-
-  // Set para evaluacion de politicas SEMANA/MES (solo estructurales)
-  const marcacionesFiltradasEstruct = useMemo(() => {
-    return marcaciones.filter(aplicaEstructurales);
-  }, [marcaciones, polFiltros]);
-
-  // Hay filtros granulares activos? Para mostrar aviso en UI
-  const hayFiltrosGranulares = polFiltros.dsem !== "Todos" || polFiltros.semana !== "Todas" || polFiltros.dia !== "Todos" || polFiltros.quincena !== "Todos";
-
-  const [resultado, setResultado] = useState({ politicas: [], totalEmpleados: 0 });
-  const [calculando, setCalculando] = useState(false);
-  const [progresoPol, setProgresoPol] = useState(0);
-
-  useEffect(() => {
-    if (marcacionesFiltradas.length === 0) {
-      setResultado({ politicas: POLITICAS_DEF.map(p => ({...p, desc: p.descFn(parametros), violadores:[], empleadosAfectados:0, totalViolaciones:0, porcentaje:0, cumplimiento:100})), totalEmpleados: 0 });
-      return;
-    }
-    setCalculando(true);
-    setProgresoPol(0);
-    let cancelled = false;
-
-    /* Procesar en chunks asincrónicos para no congelar el navegador */
-    const CHUNK = 800;
-    // Dataset 1: para politicas DIARIAS (todos los filtros aplicados)
-    const datos = marcacionesFiltradas;
-    // Dataset 2: para politicas SEMANALES/MENSUALES (solo estructurales) - indexado por empleado
-    const regsCompletosPorEmp = {};
-    marcacionesFiltradasEstruct.forEach(m => {
-      const id = m.IDENTIFICACION;
-      if (!regsCompletosPorEmp[id]) regsCompletosPorEmp[id] = [];
-      regsCompletosPorEmp[id].push(m);
-    });
-    // Empleados (lista basada en dataset diario - solo evaluamos quienes aparecen tras todos los filtros)
-    const porEmpleado = {};
-    datos.forEach(m => {
-      const id = m.IDENTIFICACION;
-      if (!porEmpleado[id]) porEmpleado[id] = { id, nombre: m.EMPLEADO, cargo: m.CARGO || "", sede: m.DEPENDENCIA, seccion: m.CENTROCOSTO, registros: [] };
-      porEmpleado[id].registros.push(m);
-    });
-    const empleados = Object.values(porEmpleado);
-    const totalEmpleados = empleados.length;
-    const parseCargos = str => (str||"").split(",").map(c=>c.trim().toUpperCase()).filter(Boolean);
-    const cargosSup = parseCargos(parametros.cargosSupervisor);
-    const cargosTPartido = parseCargos(parametros.turnoPartidoAplicaCargos);
-    const esSupervisor = cargo => { const c=(cargo||"").toUpperCase(); return cargosSup.some(s=>c.includes(s)); };
-    const esCargoTP = cargo => { if(!cargosTPartido.length)return true; const c=(cargo||"").toUpperCase(); return cargosTPartido.some(s=>c.includes(s)); };
-    const resultados = {};
-    POLITICAS_DEF.forEach(p => { resultados[p.id] = { ...p, desc: p.descFn(parametros), violadores: [] }; });
-    // Rangos de breaks
-    const r15Min = parametros.break15Target - parametros.break15Tolerancia;
-    const r15Max = parametros.break15Target + parametros.break15Tolerancia;
-    const r30Min = parametros.break30Target - parametros.break30Tolerancia;
-    const r30Max = parametros.break30Target + parametros.break30Tolerancia;
-    const separacionMinH = parametros.separacionMinHoras;
-    const clasificarBreak = (durMin) => {
-      if (durMin >= r15Min && durMin <= r15Max) return { ok: true, motivo: "OK 15min" };
-      if (durMin >= r30Min && durMin <= r30Max) return { ok: true, motivo: "OK 30min" };
-      if (durMin < r15Min) return { ok: false, motivo: "muy corto" };
-      if (durMin > r15Max && durMin < r30Min) return { ok: false, motivo: "zona muerta entre 15 y 30" };
-      return { ok: false, motivo: "muy largo" };
-    };
-    const totalDomingosPorMesGlobal = {};
-    { const fechasDomPorMes = {}; marcacionesFiltradasEstruct.forEach(d => { if(d.DIA_SEMANA==="Domingo"&&d.MES){ if(!fechasDomPorMes[d.MES])fechasDomPorMes[d.MES]={}; fechasDomPorMes[d.MES][d.FECHA]=1; } }); Object.keys(fechasDomPorMes).forEach(mes => { totalDomingosPorMesGlobal[mes] = Math.max(Object.keys(fechasDomPorMes[mes]).length,4); }); }
-
-    let idx = 0;
-    function processChunk() {
-      if (cancelled) return;
-      try {
-      const end = Math.min(idx + CHUNK, empleados.length);
-      for (let ei = idx; ei < end; ei++) {
-        const emp = empleados[ei];
-        const regs = emp.registros;
-        const base = { id:emp.id, nombre:emp.nombre, cargo:emp.cargo, sede:emp.sede, seccion:emp.seccion };
-        regs.forEach(r => {
-          // === POL 9 BMA: Buena Marcacion ===
-          // Si la marcacion es mala, se reporta y se EXCLUYE del resto de politicas
-          if (r.MARCACION_OK === false) {
-            resultados.BMA.violadores.push({
-              ...base, fecha: r.FECHA,
-              detalle: "Mala marcacion: " + (r.MARCACION_MOTIVO || "incompleta") + " | " + (r.BREAK_DETALLE || "sin breaks"),
-              valor: r.TOTAL_MARCAS || 0,
-            });
-            return; // skip resto de politicas para este dia
-          }
-          const horas = r.TOTAL_HORAS||0;
-          const horasExtra = Math.max(0,horas-parametros.jornadaNormal);
-          const breakPairs = r.BREAK_PAIRS||[];
-          const breaksCortos = breakPairs.filter(b=>b.tipo==="BREAK_CORTO");
-          const tpIlegales = breakPairs.filter(b=>b.tipo==="TP_ILEGAL");
-          const breakCortoMaxMin = r.BREAK_CORTO_MAX_MIN||0;
-          const breakCortoTotalMin = r.BREAK_CORTO_TOTAL_MIN||0;
-          const detBreak = r.BREAK_DETALLE||"";
-          if(horas>parametros.jornadaExtendidaHoras&&breakCortoTotalMin<parametros.breakMinimoMin) resultados.JEX.violadores.push({...base,fecha:r.FECHA,detalle:horas.toFixed(1)+"h, break total: "+breakCortoTotalMin+"min (min "+parametros.breakMinimoMin+"min)",valor:horas});
-          // POL 2: Break simulado - aplica a CADA break < minimo
-          breaksCortos.forEach(b => { if(b.duracionMin<parametros.breakMinimoMin){ const sH=Math.floor(b.salidaH)+":"+String(Math.round((b.salidaH%1)*60)).padStart(2,"0"); const lH=Math.floor(b.llegadaH)+":"+String(Math.round((b.llegadaH%1)*60)).padStart(2,"0"); resultados.BRK.violadores.push({...base,fecha:r.FECHA,detalle:"Break SIMULADO: "+b.duracionMin+"min ("+sH+"-"+lH+", min "+parametros.breakMinimoMin+"min)",valor:b.duracionMin}); } });
-          if(horas>parametros.jornadaMaxDia) resultados.JXC.violadores.push({...base,fecha:r.FECHA,detalle:horas.toFixed(1)+"h (max "+parametros.jornadaMaxDia+"h, excede "+(horas-parametros.jornadaMaxDia).toFixed(1)+"h)",valor:horas});
-          // POL 5: Break fuera de rango (solo evalua los que pasan minimo de pol 2)
-          const breaksEval = breaksCortos.filter(b => b.duracionMin >= parametros.breakMinimoMin);
-          breaksEval.forEach(b => { const cl = clasificarBreak(b.duracionMin); if(!cl.ok){ const sH=Math.floor(b.salidaH)+":"+String(Math.round((b.salidaH%1)*60)).padStart(2,"0"); const lH=Math.floor(b.llegadaH)+":"+String(Math.round((b.llegadaH%1)*60)).padStart(2,"0"); resultados.EBR.violadores.push({...base,fecha:r.FECHA,detalle:"Break FUERA DE RANGO: "+b.duracionMin+"min ("+sH+"-"+lH+"). "+cl.motivo+". Validos: "+r15Min+"-"+r15Max+"min o "+r30Min+"-"+r30Max+"min",valor:b.duracionMin}); } });
-          // Anti-fusion
-          if (breaksEval.length >= 2) { const ord = [...breaksEval].sort((a,b)=>a.salidaH-b.salidaH); for (let i=1;i<ord.length;i++){ const horasEntre = ord[i].salidaH - ord[i-1].llegadaH; if(horasEntre < separacionMinH){ const fA=Math.floor(ord[i-1].llegadaH)+":"+String(Math.round((ord[i-1].llegadaH%1)*60)).padStart(2,"0"); const iB=Math.floor(ord[i].salidaH)+":"+String(Math.round((ord[i].salidaH%1)*60)).padStart(2,"0"); resultados.EBR.violadores.push({...base,fecha:r.FECHA,detalle:"BREAKS PEGADOS: solo "+horasEntre.toFixed(2)+"h de trabajo entre breaks ("+fA+"-"+iB+"). Min "+separacionMinH+"h",valor:Math.round(horasEntre*100)/100}); } } }
-          tpIlegales.forEach(b => { const sH=Math.floor(b.salidaH)+":"+String(Math.round((b.salidaH%1)*60)).padStart(2,"0"); const lH=Math.floor(b.llegadaH)+":"+String(Math.round((b.llegadaH%1)*60)).padStart(2,"0"); resultados.EBR.violadores.push({...base,fecha:r.FECHA,detalle:"TP ILEGAL: "+b.duracionMin+"min ("+sH+"-"+lH+")",valor:b.duracionMin}); });
-          if(horasExtra>parametros.horasExtraMaxDia) resultados.HED.violadores.push({...base,fecha:r.FECHA,detalle:horasExtra.toFixed(1)+"h extra (max "+parametros.horasExtraMaxDia+"h). Total: "+horas.toFixed(1)+"h",valor:horasExtra});
-        });
-        // Para politicas SEMANALES y MENSUALES: usar dataset estructural (sin granulares) y SOLO dias con buena marcacion
-        const regsCompletos = (regsCompletosPorEmp[emp.id] || regs).filter(r => r.MARCACION_OK !== false);
-        const porSemana = {};
-        regsCompletos.forEach(r => { const sem=r.SEMANA||"Sin semana"; if(!porSemana[sem])porSemana[sem]=[]; porSemana[sem].push(r); });
-        Object.entries(porSemana).forEach(([semana,regsS]) => {
-          const heS = regsS.reduce((s,r)=>s+Math.max(0,(r.TOTAL_HORAS||0)-parametros.jornadaNormal),0);
-          const diasTP = regsS.filter(r=>(r.TURNOS_PARTIDOS||r.TURNO_PARTIDO||0)>0).length;
-          if(esCargoTP(emp.cargo)&&diasTP>parametros.turnoPartidoMaxSemana){ const leg=regsS.reduce((s,r)=>s+(r.TP_LEGALES||0),0); const ile=regsS.reduce((s,r)=>s+(r.TP_ILEGALES||0),0); resultados.TPE.violadores.push({...base,fecha:semana,detalle:diasTP+" dias TP (max "+parametros.turnoPartidoMaxSemana+"). Leg:"+leg+" Ile:"+ile,valor:diasTP}); }
-          if(heS>parametros.horasExtraMaxSemana) resultados.HES.violadores.push({...base,fecha:semana,detalle:heS.toFixed(1)+"h extra en semana (max "+parametros.horasExtraMaxSemana+"h)",valor:heS});
-        });
-        const domingosPorMes = {};
-        regsCompletos.forEach(r => { if(r.DIA_SEMANA==="Domingo"){ const mes=r.MES||"Sin mes"; domingosPorMes[mes]=(domingosPorMes[mes]||0)+1; } });
-        Object.entries(domingosPorMes).forEach(([mes,trabajados]) => {
-          const totalDom = totalDomingosPorMesGlobal[mes]||4;
-          const libres = totalDom - trabajados;
-          if (libres < parametros.domingoMinDescansoBase) resultados.DBA.violadores.push({...base,fecha:mes,detalle:trabajados+"/"+totalDom+" domingos, "+libres+" libre(s) (min "+parametros.domingoMinDescansoBase+")",valor:trabajados});
-        });
-      }
-      idx = end;
-      if (!cancelled) setProgresoPol(Math.round(idx / empleados.length * 100));
-      if (idx < empleados.length) {
-        if (!cancelled) setTimeout(processChunk, 0);
-      } else {
-        const politicas = POLITICAS_DEF.map(pd => {
-          const r = resultados[pd.id];
-          const unicos = {}; r.violadores.forEach(v => { unicos[v.id]=true; });
-          const ea = Object.keys(unicos).length;
-          return { ...r, empleadosAfectados:ea, totalViolaciones:r.violadores.length, porcentaje:totalEmpleados>0?ea/totalEmpleados:0, cumplimiento:totalEmpleados>0?Math.round((1-ea/totalEmpleados)*100):100 };
-        });
-        if (!cancelled) { setResultado({ politicas, totalEmpleados }); setCalculando(false); }
-      }
-      } catch(chunkErr) { console.error("Error en processChunk:", chunkErr); if (!cancelled) { setCalculando(false); setResultado({ politicas: POLITICAS_DEF.map(p => ({...p, desc: p.descFn(parametros), violadores:[], empleadosAfectados:0, totalViolaciones:0, porcentaje:0, cumplimiento:100})), totalEmpleados: 0, error: "Error calculando politicas: " + chunkErr.message }); } }
-    }
-    var t = setTimeout(processChunk, 50);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [marcacionesFiltradas, marcacionesFiltradasEstruct, parametros]);
-
-  const { politicas, totalEmpleados, error: polError } = resultado;
-
-  const setParam = (clave, valor) => setParametros((prev) => ({ ...prev, [clave]: valor }));
-  const resetParams = () => setParametros({ ...PARAMS_DEFAULT });
-
-  // Graficos
-  const barData = politicas.map((p) => ({
-    name: p.id, cumple: totalEmpleados - p.empleadosAfectados, noCumple: p.empleadosAfectados,
-  }));
-  const radarData = politicas.map((p) => ({ ind: p.id, val: p.cumplimiento }));
-
-  // Violadores filtrados
-  const violadoresFiltrados = useMemo(() => {
-    if (!polSeleccionada) return [];
-    const pol = politicas.find((p) => p.id === polSeleccionada);
-    if (!pol) return [];
-    let viols = pol.violadores;
-    if (busquedaPol.trim()) {
-      const q = busquedaPol.trim().toLowerCase();
-      viols = viols.filter((v) =>
-        v.nombre.toLowerCase().includes(q) || String(v.id).includes(q) ||
-        (v.cargo && v.cargo.toLowerCase().includes(q)) || (v.seccion && v.seccion.toLowerCase().includes(q))
-      );
-    }
-    return viols;
-  }, [polSeleccionada, politicas, busquedaPol]);
-
-  const totalPaginasViol = Math.ceil(violadoresFiltrados.length / VIOL_POR_PAGINA);
-  const violadoresPagina = violadoresFiltrados.slice(paginaPol * VIOL_POR_PAGINA, (paginaPol + 1) * VIOL_POR_PAGINA);
-
-  const colorCumpl = (cum) => cum >= 90 ? C.p : cum >= 70 ? C.ac : C.dg;
-
-  const polActiva = politicas.find((p) => p.id === polSeleccionada);
-
-  const resumen = useMemo(() => {
-    if (!politicas.length) return { peor: { id: "-", cumplimiento: 0 }, mejor: { id: "-", cumplimiento: 100 }, promedio: 0 };
-    const peor = politicas.reduce((min, p) => p.cumplimiento < min.cumplimiento ? p : min, politicas[0]);
-    const mejor = politicas.reduce((max, p) => p.cumplimiento > max.cumplimiento ? p : max, politicas[0]);
-    const promedio = Math.round(politicas.reduce((s, p) => s + p.cumplimiento, 0) / politicas.length);
-    return { peor, mejor, promedio };
-  }, [politicas]);
-
-  /* Exportar politicas a Excel estilizado (HTML-Excel, soporta colores y formatos) */
-  const exportarPolExcel = (polsSeleccionadas) => {
-    const fecha = new Date().toISOString().slice(0, 10);
-    // Filtrar solo las políticas elegidas en el modal
-    const politicasFiltradas = politicas.filter(p => polsSeleccionadas.has(p.id));
-    const colorCump = (c) => c >= 90 ? "#d4edda" : c >= 70 ? "#fff3cd" : "#f8d7da";
-    const colorCumpText = (c) => c >= 90 ? "#155724" : c >= 70 ? "#856404" : "#721c24";
-
-    const estilosBase = `
-      <style>
-        body { font-family: Calibri, sans-serif; font-size: 11pt; }
-        table { border-collapse: collapse; width: 100%; }
-        th { background: #1f6b2e; color: #ffffff; font-weight: bold; padding: 8px 10px; text-align: left; border: 1px solid #155722; font-size: 10pt; }
-        td { padding: 6px 10px; border: 1px solid #d0e4d4; font-size: 10pt; vertical-align: top; }
-        tr:nth-child(even) td { background: #f4faf5; }
-        .titulo { background: #0f1f13; color: #fff; padding: 14px 18px; font-size: 16pt; font-weight: bold; margin-bottom: 0; }
-        .subtitulo { background: #1f6b2e; color: #e8f5eb; padding: 6px 18px; font-size: 10pt; margin-bottom: 20px; }
-        .section-header { background: #1f6b2e; color: white; padding: 10px 14px; font-size: 13pt; font-weight: bold; margin: 24px 0 0; border-radius: 4px 4px 0 0; page-break-before: auto; }
-        .section-desc { background: #e8f5eb; padding: 5px 14px; font-size: 9pt; color: #3a5e42; margin: 0 0 8px; border: 1px solid #c8dece; font-style: italic; border-radius: 0 0 4px 4px; }
-        .badge-ok { background: #d4edda; color: #155724; padding: 2px 8px; border-radius: 12px; font-weight: bold; font-size: 9pt; display: inline-block; }
-        .badge-warn { background: #fff3cd; color: #856404; padding: 2px 8px; border-radius: 12px; font-weight: bold; font-size: 9pt; display: inline-block; }
-        .badge-bad { background: #f8d7da; color: #721c24; padding: 2px 8px; border-radius: 12px; font-weight: bold; font-size: 9pt; display: inline-block; }
-        .meta-box { background: #f4faf5; border: 1px solid #c8dece; padding: 12px 18px; margin-bottom: 20px; border-radius: 6px; }
-        .meta-box td { border: none; padding: 3px 16px 3px 0; background: transparent; }
-        .meta-label { color: #3a5e42; font-weight: bold; font-size: 10pt; }
-        .no-violations { color: #888; font-style: italic; padding: 10px; }
-        @media print { .section-header { page-break-before: always; } }
-      </style>`;
-
-    const badgeHtml = (c) => {
-      if (c >= 90) return `<span class="badge-ok">${c}%</span>`;
-      if (c >= 70) return `<span class="badge-warn">${c}%</span>`;
-      return `<span class="badge-bad">${c}%</span>`;
-    };
-
-    // Hoja 1: RESUMEN
-    const filasPol = politicasFiltradas.map((p, i) => {
-      const bg = i % 2 === 0 ? "" : "background:#f4faf5";
-      return `<tr style="${bg}">
-        <td style="font-weight:bold;color:#1f6b2e">${p.num}</td>
-        <td>${p.nombre}</td>
-        <td style="text-align:center">${badgeHtml(p.cumplimiento)}</td>
-        <td style="text-align:center;color:#b45309;font-weight:bold">${(100 - p.cumplimiento).toFixed(1)}%</td>
-        <td style="text-align:center;font-weight:bold">${p.empleadosAfectados}</td>
-        <td style="text-align:center">${p.totalViolaciones}</td>
-        <td style="text-align:center">${totalEmpleados}</td>
-      </tr>`;
-    }).join("");
-
-    const htmlResumen = `<!DOCTYPE html><html><head><meta charset="UTF-8">${estilosBase}</head><body>
-      <div class="titulo">REPORTE DE POLITICAS LABORALES</div>
-      <div class="subtitulo">Supertiendas Cañaveral · Analisis de Cumplimiento · ${politicasFiltradas.length} de ${politicas.length} politicas incluidas</div>
-      <div class="meta-box"><table><tr>
-        <td><span class="meta-label">Sede:</span> ${sedeSel}</td>
-        <td><span class="meta-label">Mes:</span> ${mesSel}</td>
-        <td><span class="meta-label">Empleados evaluados:</span> ${totalEmpleados}</td>
-        <td><span class="meta-label">Cumplimiento promedio:</span> ${badgeHtml(resumen.promedio)}</td>
-        <td><span class="meta-label">Fecha:</span> ${fecha}</td>
-      </tr></table></div>
-      <div class="section-header">RESUMEN DE POLITICAS SELECCIONADAS</div>
-      <table><thead><tr>
-        <th style="width:40px">#</th>
-        <th>Politica</th>
-        <th style="width:110px;text-align:center">Cumplimiento</th>
-        <th style="width:110px;text-align:center">Incumplimiento</th>
-        <th style="width:120px;text-align:center">Emp. Afectados</th>
-        <th style="width:100px;text-align:center">Violaciones</th>
-        <th style="width:100px;text-align:center">Total Emp.</th>
-      </tr></thead><tbody>${filasPol}</tbody></table>
-      ${politicasFiltradas.map((p) => {
-        const filasV = p.violadores.length === 0
-          ? `<tr><td colspan="8" class="no-violations">Sin violaciones registradas para esta politica</td></tr>`
-          : p.violadores.map((v, i) => {
-              const bg = i % 2 === 0 ? "" : "background:#f4faf5";
-              return `<tr style="${bg}">
-                <td style="font-family:monospace">${v.id}</td>
-                <td style="font-weight:500">${v.nombre}</td>
-                <td>${v.cargo || "-"}</td>
-                <td>${v.sede || "-"}</td>
-                <td>${v.seccion || "-"}</td>
-                <td>${v.fecha || "-"}</td>
-                <td style="color:#555">${v.detalle || "-"}</td>
-                <td style="text-align:center;font-weight:bold">${v.valor != null ? v.valor : "-"}</td>
-              </tr>`;
-            }).join("");
-        return `<div class="section-header">${p.num}. ${p.nombre.toUpperCase()} — ${badgeHtml(p.cumplimiento)}</div>
-          <div class="section-desc">${p.desc}</div>
-          <table><thead><tr>
-            <th style="width:110px">ID</th><th>Empleado</th><th>Cargo</th>
-            <th>Sede</th><th>Seccion</th><th style="width:120px">Fecha/Periodo</th>
-            <th>Detalle del Incumplimiento</th><th style="width:60px">Valor</th>
-          </tr></thead><tbody>${filasV}</tbody></table>`;
-      }).join("")}
-      <div style="margin-top:24px;padding:10px 14px;border-top:2px solid #1f6b2e;text-align:center">
-        <p style="font-size:8pt;color:#888;margin:0">CONFIDENCIAL — Generado por ${userName || "Usuario"} el ${fecha} · Seguimiento App · Supertiendas Cañaveral S.A.</p>
-      </div>
-    </body></html>`;
-
-    try {
-      const blob = new Blob([htmlResumen], { type: "application/vnd.ms-excel;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "Politicas_" + (sedeSel !== "Todas" ? sedeSel + "_" : "") + (mesSel !== "Todos" ? mesSel + "_" : "") + fecha + ".xls";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch(e) { alert("Error al exportar Excel: " + e.message); }
-  };
-
-  return (
-    <div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      {mostrarInforme && <InformeView politicas={politicas} totalEmpleados={totalEmpleados} sede={sedeSel} mes={mesSel} parametros={parametros} marcaciones={marcacionesFiltradas} userName={userName} onCerrar={() => setMostrarInforme(false)} />}
-      {/* HEADER */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:8}}>
-        <div>
-          <h2 style={{color:C.w,fontSize:18,fontWeight:700,margin:0}}>Politicas Laborales</h2>
-          <p style={{color:C.td,fontSize:11,margin:"3px 0 0",display:"flex",alignItems:"center",gap:6}}>
-            {calculando
-              ? <><span style={{width:10,height:10,borderRadius:"50%",border:"2px solid "+C.p,borderTopColor:"transparent",display:"inline-block",animation:"spin 0.7s linear infinite"}} /><span style={{color:C.p}}>Calculando politicas... {progresoPol}%</span><span style={{width:80,height:4,background:C.bd,borderRadius:2,overflow:"hidden",display:"inline-block",marginLeft:6}}><span style={{width:progresoPol+"%",height:"100%",background:C.p,display:"block",borderRadius:2,transition:"width 0.2s"}} /></span></>
-              : polError
-              ? <span style={{color:C.dg}}>{polError}</span>
-              : <span>{totalEmpleados} empleados evaluados {polFiltros.sede !== "Todas" ? `en ${polFiltros.sede}` : "en todas las sedes"}{polFiltros.mes !== "Todos" ? ` · ${polFiltros.mes}` : ""}{polFiltros.seccion !== "Todas" ? ` · ${polFiltros.seccion}` : ""}{polFiltros.clase !== "Todas" ? ` · ${polFiltros.clase}` : ""} | 9 politicas activas{hayFiltrosGranulares && <span style={{color:C.ac,marginLeft:8,fontWeight:600}}>· filtros granulares activos (afectan solo Pol 1, 2, 3, 5, 8)</span>}</span>
-            }
-          </p>
-        </div>
-        <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-          {opcionesPolFiltros.sedes.length     > 1 && <Pill label="Sede"     value={polFiltros.sede}     options={opcionesPolFiltros.sedes}     onChange={(v) => { setPolFiltro("sede", v);     setPolSeleccionada(null); setPaginaPol(0); }} />}
-          {opcionesPolFiltros.secciones.length > 1 && <Pill label="Seccion"  value={polFiltros.seccion}  options={opcionesPolFiltros.secciones} onChange={(v) => { setPolFiltro("seccion", v);  setPolSeleccionada(null); setPaginaPol(0); }} />}
-          {opcionesPolFiltros.clases.length    > 1 && <Pill label="Clase"    value={polFiltros.clase}    options={opcionesPolFiltros.clases}    onChange={(v) => { setPolFiltro("clase", v);    setPolSeleccionada(null); setPaginaPol(0); }} />}
-          {opcionesPolFiltros.meses.length     > 1 && <Pill label="Mes"      value={polFiltros.mes}      options={opcionesPolFiltros.meses}     onChange={(v) => { setPolFiltro("mes", v);      setPolSeleccionada(null); setPaginaPol(0); }} />}
-          {opcionesPolFiltros.dsems.length     > 1 && <Pill label="Dia Sem"  value={polFiltros.dsem}     options={opcionesPolFiltros.dsems}     onChange={(v) => { setPolFiltro("dsem", v);     setPolSeleccionada(null); setPaginaPol(0); }} />}
-          {opcionesPolFiltros.semanas.length   > 1 && <Pill label="Semana"   value={polFiltros.semana}   options={opcionesPolFiltros.semanas}   onChange={(v) => { setPolFiltro("semana", v);   setPolSeleccionada(null); setPaginaPol(0); }} />}
-          {opcionesPolFiltros.dias.length      > 1 && <Pill label="Dia"      value={polFiltros.dia}      options={opcionesPolFiltros.dias}      onChange={(v) => { setPolFiltro("dia", v);      setPolSeleccionada(null); setPaginaPol(0); }} />}
-          {opcionesPolFiltros.quincenas.length > 1 && <Pill label="Quincena" value={polFiltros.quincena} options={opcionesPolFiltros.quincenas} onChange={(v) => { setPolFiltro("quincena", v); setPolSeleccionada(null); setPaginaPol(0); }} />}
-          {(polFiltros.sede !== "Todas" || polFiltros.seccion !== "Todas" || polFiltros.clase !== "Todas" || polFiltros.mes !== "Todos" || hayFiltrosGranulares) && (
-            <button onClick={() => { setPolFiltros(polFiltrosDefault); setPolSeleccionada(null); setPaginaPol(0); }}
-              style={{padding:"6px 10px",borderRadius:7,fontSize:11,fontWeight:600,background:"transparent",border:"1px solid "+C.dg,color:C.dg,cursor:"pointer"}}>
-              Limpiar filtros
-            </button>
-          )}
-          <button onClick={() => setMostrarConfig(!mostrarConfig)} style={{padding:"6px 12px",borderRadius:7,fontSize:11,fontWeight:500,background:mostrarConfig?C.pg:"transparent",border:"1px solid "+(mostrarConfig?C.p:C.bd),color:mostrarConfig?C.p:C.tm,cursor:"pointer"}}>
-            {mostrarConfig ? "Ocultar Parametros" : "Configurar Parametros"}
-          </button>
-          <button onClick={() => setMostrarInforme(true)} disabled={calculando} style={{padding:"6px 12px",borderRadius:7,fontSize:11,fontWeight:600,background:calculando?"#ccc":"linear-gradient(135deg,#1C5A2A,#7dd105)",border:"none",color:"#fff",cursor:calculando?"not-allowed":"pointer",opacity:calculando?0.6:1}}>
-            {calculando ? "Calculando..." : "Generar Informe"}
-          </button>
-          <button onClick={() => { setPolsParaExcel(new Set(politicas.map(p => p.id))); setMostrarModalExcel(true); }} disabled={calculando || politicas.length === 0} style={{padding:"6px 12px",borderRadius:7,fontSize:11,fontWeight:600,background:C.sf,border:"1px solid "+(calculando?"#ccc":C.p),color:calculando?"#aaa":C.p,cursor:calculando?"not-allowed":"pointer",opacity:calculando?0.6:1}}>
-            {calculando ? "Espera..." : "Exportar Excel"}
-          </button>
-        </div>
-      </div>
-
-      {/* MODAL SELECCIÓN POLÍTICAS PARA EXCEL */}
-      {mostrarModalExcel && polsParaExcel && (
-        <div style={{position:"fixed",inset:0,zIndex:9990,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center"}} onClick={() => setMostrarModalExcel(false)}>
-          <div style={{background:C.sf,borderRadius:16,width:480,maxWidth:"95vw",boxShadow:"0 24px 60px rgba(0,0,0,0.3)",border:"1px solid "+C.bd,overflow:"hidden"}} onClick={e => e.stopPropagation()}>
-            <div style={{background:"linear-gradient(135deg,#0f1f13,#1f6b2e)",padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div>
-                <div style={{color:"#e8f5eb",fontSize:14,fontWeight:700}}>Exportar Excel</div>
-                <div style={{color:"#7aab85",fontSize:11,marginTop:2}}>Selecciona las políticas a incluir en el archivo</div>
-              </div>
-              <button onClick={() => setMostrarModalExcel(false)} style={{background:"rgba(255,255,255,0.1)",border:"none",color:"#e8f5eb",width:28,height:28,borderRadius:7,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
-            </div>
-            <div style={{padding:"10px 20px",borderBottom:"1px solid "+C.bd,display:"flex",gap:8,alignItems:"center"}}>
-              <span style={{color:C.td,fontSize:11,flex:1}}>{polsParaExcel.size} de {politicas.length} políticas seleccionadas</span>
-              <button onClick={() => setPolsParaExcel(new Set(politicas.map(p => p.id)))} style={{padding:"4px 10px",borderRadius:6,fontSize:10,fontWeight:600,border:"1px solid "+C.bd,background:C.sa,color:C.tm,cursor:"pointer"}}>Todas</button>
-              <button onClick={() => setPolsParaExcel(new Set())} style={{padding:"4px 10px",borderRadius:6,fontSize:10,fontWeight:600,border:"1px solid "+C.bd,background:C.sa,color:C.tm,cursor:"pointer"}}>Ninguna</button>
-              <button onClick={() => setPolsParaExcel(new Set(politicas.filter(p => p.empleadosAfectados > 0).map(p => p.id)))} style={{padding:"4px 10px",borderRadius:6,fontSize:10,fontWeight:600,border:"1px solid "+C.dg,background:"rgba(220,38,38,0.06)",color:C.dg,cursor:"pointer"}}>Solo con infracciones</button>
-            </div>
-            <div style={{padding:"8px 12px",maxHeight:320,overflowY:"auto"}}>
-              {politicas.map((p) => {
-                const sel = polsParaExcel.has(p.id);
-                const colorCump = p.cumplimiento >= 90 ? C.p : p.cumplimiento >= 70 ? C.ac : C.dg;
-                const bgBadge = p.cumplimiento >= 90 ? "rgba(31,107,46,0.1)" : p.cumplimiento >= 70 ? "rgba(180,83,9,0.1)" : "rgba(220,38,38,0.1)";
-                return (
-                  <div key={p.id} onClick={() => setPolsParaExcel(prev => { const n = new Set(prev); sel ? n.delete(p.id) : n.add(p.id); return n; })}
-                    style={{display:"flex",alignItems:"center",gap:12,padding:"10px",borderRadius:9,marginBottom:3,cursor:"pointer",background:sel?C.pg:"transparent",border:"1px solid "+(sel?C.bd:"transparent"),transition:"all 0.1s"}}>
-                    <div style={{width:18,height:18,borderRadius:5,border:"2px solid "+(sel?C.p:C.bd),background:sel?C.p:"transparent",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s"}}>
-                      {sel && <span style={{color:"#fff",fontSize:11,fontWeight:700,lineHeight:1}}>✓</span>}
-                    </div>
-                    <span style={{width:22,height:22,borderRadius:6,background:sel?C.p:C.sa,color:sel?"#fff":C.tm,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{p.num}</span>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{color:sel?C.t:C.tm,fontSize:12,fontWeight:sel?600:400,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.nombre}</div>
-                      <div style={{color:C.td,fontSize:10,marginTop:1}}>{p.empleadosAfectados} afectados · {p.totalViolaciones} infracciones</div>
-                    </div>
-                    <span style={{padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700,color:colorCump,background:bgBadge,flexShrink:0}}>{p.cumplimiento}%</span>
-                  </div>
-                );
-              })}
-            </div>
-            <div style={{padding:"14px 20px",borderTop:"1px solid "+C.bd,display:"flex",gap:8,justifyContent:"flex-end",alignItems:"center"}}>
-              <span style={{color:C.dg,fontSize:11,flex:1}}>{polsParaExcel.size === 0 ? "⚠ Selecciona al menos una política" : ""}</span>
-              <button onClick={() => setMostrarModalExcel(false)} style={{padding:"8px 16px",borderRadius:8,fontSize:11,border:"1px solid "+C.bd,background:"transparent",color:C.tm,cursor:"pointer"}}>Cancelar</button>
-              <button disabled={polsParaExcel.size === 0} onClick={() => { exportarPolExcel(polsParaExcel); setMostrarModalExcel(false); }}
-                style={{padding:"8px 18px",borderRadius:8,fontSize:11,fontWeight:700,background:polsParaExcel.size===0?"#ccc":"linear-gradient(135deg,#1f6b2e,#3a9a50)",border:"none",color:"#fff",cursor:polsParaExcel.size===0?"not-allowed":"pointer",boxShadow:polsParaExcel.size>0?"0 2px 8px rgba(31,107,46,0.3)":"none"}}>
-                ⬇ Descargar {polsParaExcel.size > 0 ? `(${polsParaExcel.size} política${polsParaExcel.size > 1 ? "s" : ""})` : ""}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* PANEL DE CONFIGURACION */}
-      {mostrarConfig && (
-        <div style={{padding:16,borderRadius:14,background:"linear-gradient(145deg,"+C.sf+","+C.sa+")",border:"1px solid "+C.bd,marginBottom:16}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-            <h3 style={{color:C.w,fontSize:13,fontWeight:600,margin:0}}>Parametros de Evaluacion</h3>
-            <button onClick={resetParams} style={{padding:"4px 10px",borderRadius:5,fontSize:10,background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",color:"#fca5a5",cursor:"pointer"}}>Restaurar Defaults</button>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(210px,1fr))",gap:12}}>
-            {/* Jornada */}
-            <div style={{padding:12,borderRadius:10,background:C.bg,border:"1px solid "+C.bd}}>
-              <div style={{color:C.p,fontSize:10,fontWeight:700,marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Jornada (Pol 1, 3)</div>
-              <ParamInput label="Jornada normal (hrs)" value={parametros.jornadaNormal} onChange={(v) => setParam("jornadaNormal", v)} ayuda="Duracion estandar del turno" />
-              <ParamInput label="Max horas/dia" value={parametros.jornadaMaxDia} onChange={(v) => setParam("jornadaMaxDia", v)} ayuda="Si supera esto = Jornada Excesiva" />
-              <ParamInput label="Jornada extendida (hrs)" value={parametros.jornadaExtendidaHoras} onChange={(v) => setParam("jornadaExtendidaHoras", v)} ayuda="Umbral para Pol 1 (sin descanso)" />
-            </div>
-            {/* Breaks */}
-            <div style={{padding:12,borderRadius:10,background:C.bg,border:"1px solid "+C.bd}}>
-              <div style={{color:C.s,fontSize:10,fontWeight:700,marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Breaks (Pol 2, 5)</div>
-              <ParamInput label="Break minimo (min)" value={parametros.breakMinimoMin} onChange={(v) => setParam("breakMinimoMin", v)} ayuda="Pol 2: menos de esto = break simulado" />
-              <ParamInput label="Target break 15 (min)" value={parametros.break15Target} onChange={(v) => setParam("break15Target", v)} ayuda="Duracion ideal del break corto" />
-              <ParamInput label="Tolerancia 15 (±min)" value={parametros.break15Tolerancia} onChange={(v) => setParam("break15Tolerancia", v)} ayuda={"Rango valido: "+(parametros.break15Target-parametros.break15Tolerancia)+"-"+(parametros.break15Target+parametros.break15Tolerancia)+"min"} />
-              <ParamInput label="Target break 30 (min)" value={parametros.break30Target} onChange={(v) => setParam("break30Target", v)} ayuda="Duracion ideal del break largo" />
-              <ParamInput label="Tolerancia 30 (±min)" value={parametros.break30Tolerancia} onChange={(v) => setParam("break30Tolerancia", v)} ayuda={"Rango valido: "+(parametros.break30Target-parametros.break30Tolerancia)+"-"+(parametros.break30Target+parametros.break30Tolerancia)+"min"} />
-              <ParamInput label="Separacion min entre breaks (h)" value={parametros.separacionMinHoras} onChange={(v) => setParam("separacionMinHoras", v)} ayuda="Anti-fusion: si toma 2 breaks, deben tener N horas de trabajo entre medias" />
-              <ParamInput label="Umbral turno partido (min)" value={parametros.breakMaxPermitido} onChange={(v) => setParam("breakMaxPermitido", v)} ayuda=">=esto se considera turno partido, no break" />
-            </div>
-            {/* Turnos Partidos */}
-            <div style={{padding:12,borderRadius:10,background:C.bg,border:"1px solid "+C.bd}}>
-              <div style={{color:"#8b5cf6",fontSize:10,fontWeight:700,marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Turnos Partidos (Pol 4)</div>
-              <ParamInput label="TP legal minimo (min)" value={parametros.turnoPartidoLegalMin} onChange={(v) => setParam("turnoPartidoLegalMin", v)} ayuda="2h50m=170min. Menos de esto = TP ilegal" />
-              <ParamInput label="Max TP por semana" value={parametros.turnoPartidoMaxSemana} onChange={(v) => setParam("turnoPartidoMaxSemana", v)} />
-              <ParamInput label="Aplica a cargos" value={parametros.turnoPartidoAplicaCargos} onChange={(v) => setParam("turnoPartidoAplicaCargos", v)} tipo="text" ayuda="Separados por coma. Vacio = todos" />
-            </div>
-            {/* Pol 6: Domingos Personal Base */}
-            <div style={{padding:12,borderRadius:10,background:C.bg,border:"1px solid "+C.bd}}>
-              <div style={{color:"#a78bfa",fontSize:10,fontWeight:700,marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Pol 6: Domingos Personal Base</div>
-              <ParamInput label="Min domingos libres/mes" value={parametros.domingoMinDescansoBase} onChange={(v) => setParam("domingoMinDescansoBase", v)} ayuda="Deben descansar al menos N domingo(s) al mes" />
-              <div style={{marginTop:6,padding:6,borderRadius:4,background:"rgba(167,139,250,0.08)",border:"1px solid rgba(167,139,250,0.15)"}}>
-                <span style={{color:"#c4b5fd",fontSize:8,lineHeight:"1.4",display:"block"}}>Aplica a TODOS los cargos. Deben descansar al menos {parametros.domingoMinDescansoBase} domingo(s) al mes.</span>
-              </div>
-            </div>
-            {/* Horas Extra */}
-            <div style={{padding:12,borderRadius:10,background:C.bg,border:"1px solid "+C.bd}}>
-              <div style={{color:C.ac,fontSize:10,fontWeight:700,marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Horas Extra (Pol 7, 8)</div>
-              <ParamInput label="Max HE por semana" value={parametros.horasExtraMaxSemana} onChange={(v) => setParam("horasExtraMaxSemana", v)} ayuda="Pol 7: Acumulado semanal" />
-              <ParamInput label="Max HE por dia" value={parametros.horasExtraMaxDia} onChange={(v) => setParam("horasExtraMaxDia", v)} ayuda={"Pol 8: Sobre jornada normal de "+parametros.jornadaNormal+"h"} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* RESUMEN RAPIDO */}
-      <div style={{display:"flex",flexWrap:"wrap",gap:10,marginBottom:16}}>
-        {[
-          { l: "Cumplimiento Promedio", v: resumen.promedio + "%", c: colorCumpl(resumen.promedio) },
-          { l: "Mejor Politica", v: `${resumen.mejor.nombre || resumen.mejor.id} (${resumen.mejor.cumplimiento}%)`, c: C.p },
-          { l: "Peor Politica", v: `${resumen.peor.nombre || resumen.peor.id} (${resumen.peor.cumplimiento}%)`, c: C.dg },
-          { l: "Empleados Evaluados", v: totalEmpleados, c: C.s },
-        ].map((s, i) => (
-          <div key={i} style={{padding:14,borderRadius:12,background:"linear-gradient(145deg,"+C.sf+","+C.sa+")",border:"1px solid "+C.bd,flex:"1 1 180px"}}>
-            <div style={{color:C.tm,fontSize:10,marginBottom:5}}>{s.l}</div>
-            <div style={{fontSize:18,fontWeight:700,color:s.c,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.v}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* TARJETAS DE 9 POLITICAS */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:10,marginBottom:16}}>
-        {politicas.map((p) => {
-          const sc = colorCumpl(p.cumplimiento);
-          const activa = polSeleccionada === p.id;
-          return (
-            <div key={p.id} onClick={() => { setPolSeleccionada(activa ? null : p.id); setBusquedaPol(""); setPaginaPol(0); }}
-              style={{padding:14,borderRadius:12,background:C.sf,border:"2px solid "+(activa?C.p:C.bd),cursor:"pointer",transition:"all 0.15s",boxShadow:activa?"0 4px 16px rgba(31,107,46,0.15)":"0 1px 3px rgba(31,107,46,0.05)"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
-                <div style={{display:"flex",alignItems:"center",gap:6,flex:1}}>
-                  <span style={{fontSize:15}}>{p.icono}</span>
-                  <div>
-                    <div style={{color:C.td,fontSize:8,fontWeight:700}}>POL {p.num}</div>
-                    <span style={{color:C.t,fontSize:11,fontWeight:600}}>{p.nombre}</span>
-                  </div>
-                </div>
-                <span style={{padding:"2px 8px",borderRadius:12,fontSize:11,fontWeight:700,background:sc+"20",color:sc,flexShrink:0}}>{p.cumplimiento}%</span>
-              </div>
-              <p style={{color:C.td,fontSize:9,margin:"0 0 6px"}}>{p.desc}</p>
-              <div style={{height:5,borderRadius:3,background:"#e8f2ea",overflow:"hidden",marginBottom:6}}>
-                <div style={{height:"100%",borderRadius:3,width:p.cumplimiento+"%",background:sc,transition:"width 0.5s"}} />
-              </div>
-              <div style={{display:"flex",justifyContent:"space-between"}}>
-                <span style={{color:C.td,fontSize:9}}>Incumplen: <b style={{color:sc}}>{p.empleadosAfectados}</b></span>
-                <span style={{color:C.td,fontSize:9}}>Violaciones: {p.totalViolaciones}</span>
-                <span style={{color:C.td,fontSize:9}}>De {totalEmpleados}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* DETALLE DE VIOLADORES */}
-      {polActiva && (
-        <div style={{padding:20,borderRadius:16,background:C.sf,border:"1px solid "+C.bd,marginBottom:16,boxShadow:"0 2px 8px rgba(31,107,46,0.08)"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <span style={{fontSize:18}}>{polActiva.icono}</span>
-              <div>
-                <h3 style={{color:C.w,fontSize:14,fontWeight:600,margin:0}}>Pol {polActiva.num}: {polActiva.nombre}</h3>
-                <p style={{color:C.td,fontSize:10,margin:"2px 0 0"}}>{polActiva.desc} | {polActiva.empleadosAfectados} empleados, {polActiva.totalViolaciones} violaciones</p>
-              </div>
-            </div>
-            <div style={{display:"flex",gap:6,alignItems:"center"}}>
-              <input value={busquedaPol} onChange={(e) => { setBusquedaPol(e.target.value); setPaginaPol(0); }}
-                placeholder="Buscar empleado, cargo..."
-                style={{padding:"6px 10px",borderRadius:7,fontSize:11,background:C.sa,border:"1px solid "+C.bd,color:C.t,outline:"none",width:200,boxSizing:"border-box"}} />
-              <button onClick={() => { setPolSeleccionada(null); setBusquedaPol(""); setPaginaPol(0); }}
-                style={{padding:"6px 10px",borderRadius:7,fontSize:10,background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",color:"#fca5a5",cursor:"pointer"}}>Cerrar</button>
-            </div>
-          </div>
-
-          {violadoresFiltrados.length === 0 ? (
-            <p style={{color:C.tm,textAlign:"center",padding:20,fontSize:12}}>Sin violaciones para esta politica</p>
-          ) : (
-            <div style={{overflowX:"auto"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
-                <thead><tr>
-                  {["Empleado", "Cargo", "Sede", "Seccion", "Fecha/Periodo", "Detalle del Incumplimiento"].map((h) => (
-                    <th key={h} style={{padding:"7px 6px",textAlign:"left",color:C.tm,fontWeight:600,borderBottom:"1px solid "+C.bd,whiteSpace:"nowrap"}}>{h}</th>
-                  ))}
-                </tr></thead>
-                <tbody>
-                  {violadoresPagina.map((v, i) => {
-                    const fondoFila = i % 2 === 0 ? "transparent" : C.zebra;
-                    return (
-                      <tr key={paginaPol * VIOL_POR_PAGINA + i} style={{background:fondoFila}}>
-                        <td style={{padding:"5px 6px",color:C.t,whiteSpace:"nowrap",maxWidth:150,overflow:"hidden",textOverflow:"ellipsis"}} title={v.nombre}>{v.nombre}</td>
-                        <td style={{padding:"5px 6px",color:C.tm,whiteSpace:"nowrap",fontSize:9}}>{v.cargo}</td>
-                        <td style={{padding:"5px 6px",color:C.tm,whiteSpace:"nowrap"}}>{v.sede}</td>
-                        <td style={{padding:"5px 6px",color:C.tm,whiteSpace:"nowrap"}}>{v.seccion}</td>
-                        <td style={{padding:"5px 6px",color:C.ac,fontWeight:500,fontSize:9}}>{v.fecha}</td>
-                        <td style={{padding:"5px 6px",color:C.dg,fontWeight:500}}>{v.detalle}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-
-              {totalPaginasViol > 1 && (
-                <div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:6,marginTop:10}}>
-                  <button onClick={() => setPaginaPol(Math.max(0, paginaPol - 1))} disabled={paginaPol === 0}
-                    style={{padding:"4px 9px",borderRadius:5,fontSize:10,background:paginaPol===0?C.bg:C.sa,border:"1px solid "+C.bd,color:paginaPol===0?C.td:C.t,cursor:paginaPol===0?"default":"pointer"}}>Ant</button>
-                  <span style={{color:C.tm,fontSize:10}}>Pag {paginaPol + 1} de {totalPaginasViol}</span>
-                  <button onClick={() => setPaginaPol(Math.min(totalPaginasViol - 1, paginaPol + 1))} disabled={paginaPol >= totalPaginasViol - 1}
-                    style={{padding:"4px 9px",borderRadius:5,fontSize:10,background:paginaPol>=totalPaginasViol-1?C.bg:C.sa,border:"1px solid "+C.bd,color:paginaPol>=totalPaginasViol-1?C.td:C.t,cursor:paginaPol>=totalPaginasViol-1?"default":"pointer"}}>Sig</button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* GRAFICOS */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-        <div style={{padding:20,borderRadius:16,background:C.sf,border:"1px solid "+C.bd,boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-          <h3 style={{color:C.w,fontSize:12,fontWeight:700,margin:"0 0 10px"}}>Cumplimiento por Politica</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={barData} layout="vertical" margin={{left:35}}>
-              <CartesianGrid strokeDasharray="3 3" stroke={C.bd} />
-              <XAxis type="number" tick={{fill:C.tm,fontSize:9}} />
-              <YAxis dataKey="name" type="category" tick={{fill:C.tm,fontSize:9}} width={35} />
-              <Tooltip content={<Tip />} />
-              <Bar dataKey="cumple" name="Cumple" stackId="a" fill={C.p} />
-              <Bar dataKey="noCumple" name="No Cumple" stackId="a" fill={C.dg} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-        <div style={{padding:20,borderRadius:16,background:C.sf,border:"1px solid "+C.bd,boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-          <h3 style={{color:C.w,fontSize:12,fontWeight:700,margin:"0 0 10px"}}>Radar de Cumplimiento</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <RadarChart data={radarData}>
-              <PolarGrid stroke={C.bd} />
-              <PolarAngleAxis dataKey="ind" tick={{fill:C.tm,fontSize:8}} />
-              <PolarRadiusAxis angle={90} domain={[0,100]} tick={{fill:C.td,fontSize:8}} />
-              <Radar dataKey="val" stroke={C.p} fill={C.p} fillOpacity={0.2} strokeWidth={2} />
-            </RadarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
-/* === RULES VIEW === */
-function RulesView() {
-  const [seccionAbierta, setSeccionAbierta] = useState("vistas");
-
-  const secciones = [
-    { id:"vistas", t:"📊 Vistas de la App" },
-    { id:"filtros", t:"🔍 Filtros y Cómo Usarlos" },
-    { id:"exportar", t:"💾 Qué Puedes Exportar" },
-    { id:"editable", t:"✏️ Qué es Editable" },
-    { id:"politicas", t:"📋 Las 9 Políticas" },
-    { id:"conceptos", t:"📖 Conceptos" },
-    { id:"flujo", t:"🔄 Flujo de Trabajo" },
-    { id:"faq", t:"❓ Preguntas Frecuentes" },
-  ];
-
-  const vistas = [
-    { nombre:"Cargar Datos", icono:"⬆", desc:"Punto de entrada. Aquí cargas los archivos necesarios para que la app funcione.",
-      acepta:[ "BASE_DE_DATOS_MARCACIONES.xlsm (marcaciones de empleados)", "FACTURAS / GRAFICA_FINAL.xlsx (facturación por hora)", "Ventas_x_Hora_Semana.xlsx (alternativa de facturación)", "Archivo .json de memoria (exportado previamente)", "CSV con separador ';' (para marcaciones grandes)" ],
-      accion:"La app detecta automáticamente el tipo de archivo por su contenido." },
-    { nombre:"Resumen", icono:"📊", desc:"Vista ejecutiva con un vistazo general del estado de cumplimiento.",
-      acepta:[ "Comparativo mes vs mes (si hay 2+ meses cargados)", "Alertas automáticas de políticas que cambiaron 3%+", "Banner de cumplimiento general", "Top 5 empleados con más infracciones", "Ranking completo de sedes por cumplimiento", "Grid de las 9 políticas con su estado actual" ] },
-    { nombre:"Dashboard", icono:"◼", desc:"Curva de venta vs nivel de personal. La vista más usada del día a día.",
-      acepta:[ "Gráfico combinado: barras (personal) + línea (venta)", "8 filtros: Sede, Sección, Clase, Mes, DiaSem, Semana, Día, Quincena", "6 tarjetas de stats: Empleados, Horas/día, Max personal/hora, Días, Transacciones, Venta Total", "Tabla detallada con paginación y búsqueda", "Toggle Gráfico / Tabla / Ambos" ] },
-    { nombre:"Eficiencia", icono:"⚡", desc:"Relación entre personal asignado y ventas generadas. Identifica horas con exceso/falta de personal.",
-      acepta:[ "Ratio Ventas / Personal por hora", "Ranking de sedes por eficiencia", "Los mismos 8 filtros que Dashboard" ] },
-    { nombre:"Riesgo", icono:"⚠", desc:"Ranking de empleados con más infracciones acumuladas en todas las políticas.",
-      acepta:[ "Lista ordenada por total de violaciones", "Filtros: Sede, Mes, Política específica", "Detalle por empleado: días, cargo, cuántas violó de cada política" ] },
-    { nombre:"Tendencia", icono:"↗", desc:"Evolución mes a mes del cumplimiento de cada política.",
-      acepta:[ "Gráfico de líneas por política", "Cálculo progresivo (puede tomar segundos)", "Filtro por Sede" ] },
-    { nombre:"Políticas", icono:"📋", desc:"Vista central del análisis. Aquí ves qué políticas se cumplen y cuáles no, con lista de violadores.",
-      acepta:[ "9 tarjetas con % de cumplimiento de cada política", "Al hacer clic en una tarjeta, ves la lista de violadores", "Botón 'Configurar Parámetros' para ajustar umbrales", "Botón 'Generar Informe' → PDF/HTML descargable", "Botón 'Exportar a Excel' → archivo con formato y colores", "Filtros: Sede, Mes" ] },
-    { nombre:"Auditoría", icono:"🔍", desc:"Detalle paso a paso de cómo se calculó la jornada de UN empleado en UN día específico.",
-      acepta:[ "Buscador por nombre, ID o cargo", "Filtros: Sede, Mes", "Modal con timeline del día: entrada, breaks, salida", "Explicación de cada cálculo de política aplicada" ] },
-    { nombre:"Manual", icono:"📖", desc:"Este documento. Guía completa de la aplicación." },
-  ];
-
-  const filtros = [
-    { tipo:"Filtro Maestro", donde:"Botón 'Filtro Maestro' en la barra superior",
-      desc:"Filtro GLOBAL que afecta TODAS las vistas al mismo tiempo. Ideal cuando solo te interesa trabajar con una sede o un mes específico durante toda la sesión.",
-      permite:[ "Seleccionar una o varias sedes con buscador", "Seleccionar uno o varios meses", "Ver cuántos registros quedan después de filtrar", "Limpiar con un clic" ] },
-    { tipo:"Filtros de Vista (Pills)", donde:"Barra de Pills en cada vista (Dashboard, Eficiencia, etc.)",
-      desc:"Filtros LOCALES que solo afectan la vista donde estás. Se combinan con el Filtro Maestro si está activo.",
-      permite:[ "Sede · Sección · Clase · Mes · Día de semana · Semana · Día · Quincena", "Cada filtro es independiente, puedes combinar varios", "Botón 'Limpiar' para resetearlos todos" ] },
-    { tipo:"Búsqueda de Texto", donde:"Input de búsqueda dentro de tablas y Auditoría",
-      desc:"Busca por nombre, ID, cargo o texto libre dentro de los registros visibles." },
-  ];
-
-  const exportar = [
-    { que:"Memoria Digital (.json)", donde:"Topbar → botón 'Exportar Memoria'",
-      contiene:"Todas las marcaciones + facturas procesadas. Se puede recargar después para continuar el análisis sin volver a subir Excel.",
-      modos:[ "📦 Consolidado: un solo archivo con todo", "🏪 Todas las sedes: un archivo por sede (genera N archivos automáticamente)", "✅ Seleccionar: elige qué sedes exportar" ] },
-    { que:"Datos para Excel (.txt)", donde:"Topbar → botón 'Excel'",
-      contiene:"Marcaciones procesadas en formato TSV (tab-separated). Se abre en Excel/Google Sheets copiando el contenido." },
-    { que:"Informe PDF (vista Políticas)", donde:"Políticas → 'Generar Informe'",
-      contiene:"Reporte HTML listo para imprimir como PDF. Incluye resumen ejecutivo, detalles por política, firmas de responsables, marca de agua de confidencialidad." },
-    { que:"Políticas a Excel (vista Políticas)", donde:"Políticas → 'Exportar Excel'",
-      contiene:"HTML con formato compatible con Excel. Tablas con colores, cumplimiento destacado, violadores detallados." },
-    { que:"Todo tiene marca de agua", donde:"Automático en todos los exports",
-      contiene:"'Generado por [usuario] el [fecha] - Documento Confidencial - Supertiendas Cañaveral S.A.'" },
-  ];
-
-  const editable = [
-    { area:"Parámetros de Políticas", donde:"Políticas → 'Configurar Parámetros'",
-      si:[ "Jornada normal (default 7h)", "Jornada máxima día (default 9h)", "Jornada extendida (default 10h)", "Break mínimo (default 8min)", "Break normal max (default 15min)", "Tolerancia break (default 3min)", "Break max permitido (default 45min)", "Turno partido legal min (default 170min)", "Turno partido max semana (default 2)", "Cargos que aplican turno partido (lista personalizable)", "Domingos max supervisores (default 2)", "Cargos supervisor (default: SUPERVISOR,COORDINADOR,ADMINISTRADOR)", "Domingos min descanso base (default 1)", "Horas extra max día (default 2h)", "Horas extra max semana (default 12h)" ],
-      no:[ "Las fórmulas de cálculo de las políticas", "La lógica de clasificación de breaks", "El formato de los archivos de entrada" ] },
-    { area:"Datos de Empleados", si:["Nada editable desde la app"],
-      no:[ "Los datos vienen del Excel y son de solo lectura", "Para cambios reales hay que modificar el archivo fuente" ] },
-    { area:"Sedes y Nombres", si:["La app normaliza automáticamente los nombres (quita 'SC' duplicados, trim espacios)"],
-      no:[ "No se pueden renombrar sedes desde la app", "Si hay nombres inconsistentes, hay que corregirlos en el Excel" ] },
-  ];
-
-  const politicas = [
-    { num:1, sigla:"JEX", nombre:"Jornadas Extendidas sin Descanso", desc:"Detecta cuando un empleado trabaja más del umbral de jornada extendida Y no tuvo un descanso mínimo. Es una alerta de carga laboral sin pausa.", formula:"horas_trabajadas > 10h Y break_corto_total < 8min", defaults:"Umbral: 10h · Break mínimo: 8min", nivel:"Por día", aplica:"Todos los empleados" },
-    { num:2, sigla:"BRK", nombre:"Break Simulado (Menor al Mínimo)", desc:"Detecta breaks 'fantasma': el empleado marca salida y llegada de break pero el tiempo real es menor al mínimo. Indica simulación para tomar ventaja.", formula:"cualquier_break < 8min", defaults:"Mínimo: 8min · Aplica a CADA break del día", nivel:"Por día (por cada break)", aplica:"Todos los empleados" },
-    { num:3, sigla:"JXC", nombre:"Jornadas Excesivas", desc:"Detecta cuando la jornada supera el máximo diario permitido. Es el tope absoluto de horas diarias.", formula:"horas_trabajadas > 9h", defaults:"Tope: 9h", nivel:"Por día", aplica:"Todos los empleados" },
-    { num:4, sigla:"TPE", nombre:"Turnos Partidos Excesivos", desc:"Detecta cuando un empleado tiene más de N turnos partidos en una semana.", formula:"turnos_partidos_semana > 2", defaults:"Máx semana: 2 · Aplica a todos los cargos por default", nivel:"Por semana", aplica:"Configurable (lista de cargos)" },
-    { num:5, sigla:"EBR", nombre:"Break Fuera de Rango", desc:"Cada break individual debe estar dentro de uno de los dos rangos válidos (break de 15 o break de 30). Si toma 2 breaks, deben estar separados por al menos N horas de trabajo (anti-fusión).", formula:"break NO en [13-17] Y NO en [28-32], O dos breaks con < 2h entre ellos", defaults:"Break 15: target 15 ±2 (13-17) · Break 30: target 30 ±2 (28-32) · Separación min: 2h", nivel:"Por día (por cada break)", aplica:"Todos los empleados" },
-    { num:6, sigla:"DBA", nombre:"Domingos Personal Base", desc:"Todo empleado debe tener al menos N domingo(s) libre(s) al mes. Aplica a TODOS los cargos por igual.", formula:"domingos_libres_mes < 1", defaults:"Min domingos libres: 1", nivel:"Por mes", aplica:"Todos los empleados" },
-    { num:7, sigla:"HES", nombre:"HE Semanal", desc:"Horas extra acumuladas en una semana no deben superar el límite legal/interno.", formula:"suma_HE_semana > 12h", defaults:"Máx: 12h/semana", nivel:"Por semana", aplica:"Todos los empleados" },
-    { num:8, sigla:"HED", nombre:"HE Diaria", desc:"Horas extra en un solo día no deben superar el límite.", formula:"HE_dia > 2h (es decir, jornada > 9h si jornada normal = 7h)", defaults:"Máx: 2h/día", nivel:"Por día", aplica:"Todos los empleados" },
-    { num:9, sigla:"BMA", nombre:"Buena Marcación", desc:"Detecta días con marcación incompleta o impar (ej. 3 marcaciones, salida sin entrada, etc). FILTRO INICIAL: los días reportados aquí se EXCLUYEN automáticamente del resto de políticas, evitando que datos malos contaminen el análisis de horas extra, breaks, etc.", formula:"marcaciones par Y >= 4 (con break) Y sin breaks incompletos Y con entrada+salida", defaults:"Mín. 4 marcaciones (con break) · Patrón par", nivel:"Por día", aplica:"Todos los empleados" },
-  ];
-
-  const conceptos = [
-    { t:"Marcación", d:"Cada registro de entrada/salida/break de un empleado. Viene del archivo de reloj/control de acceso." },
-    { t:"Jornada Continua (Jorn Con)", d:"Turno sin interrupción mayor a 45 minutos. El empleado trabaja seguido con solo breaks cortos." },
-    { t:"Turno Partido Legal (Tur Par Legal)", d:"Jornada con una pausa >= 2h50min (170min) entre dos bloques de trabajo. Cumple el mínimo legal colombiano." },
-    { t:"Turno Partido Ilegal (Tur Par Ilegal)", d:"Jornada con pausa entre 45min y 2h50min. Es zona gris: ni break corto ni TP legal. Viola política 5." },
-    { t:"Sin Marcación", d:"Empleado sin registro de entrada y salida ese día. No se puede calcular horas trabajadas." },
-    { t:"Break Corto", d:"Pausa menor a 45 minutos. Descanso normal para comer o descansar durante la jornada." },
-    { t:"Grilla Horaria (1/0)", d:"Vector que indica en qué horas del día el empleado estaba presente. 1 = presente, 0 = ausente. Se usa para la curva de personal." },
-    { t:"Quincena Retail", d:"Días de alto flujo de ventas típicos del retail colombiano: 1, 2, 3, 15, 16, 17, 30, 31 (y 28-29 de febrero). No es la quincena laboral tradicional." },
-    { t:"Cumplimiento de Política", d:"% de empleados que NO violaron la política. Fórmula: (1 - afectados/total_empleados) × 100. Si 50 de 200 empleados violaron, el cumplimiento es 75%." },
-    { t:"Empleados Afectados", d:"Cantidad de empleados ÚNICOS que violaron al menos una vez. Si Juan violó 30 veces, cuenta como 1 empleado afectado." },
-    { t:"Total Violaciones", d:"Cantidad de EVENTOS de violación. Si Juan violó 30 días, son 30 violaciones. Siempre >= Empleados Afectados." },
-    { t:"Sede Crítica", d:"Sede con cumplimiento general menor a 70%. Aparece en el banner rojo del Resumen." },
-  ];
-
-  const flujo = [
-    { paso:1, t:"Cargar los datos", d:"Ve a 'Cargar Datos', sube los Excel de marcaciones y facturación. La app los procesa automáticamente." },
-    { paso:2, t:"Revisar el Resumen", d:"Entra a 'Resumen' para obtener una vista ejecutiva. Aquí verás alertas automáticas si algo cambió respecto al mes anterior." },
-    { paso:3, t:"Analizar el Dashboard", d:"Ve a 'Dashboard' para entender la relación entre personal y ventas por hora. Usa los filtros para profundizar por sede o día." },
-    { paso:4, t:"Revisar Políticas", d:"Entra a 'Políticas'. Si hay políticas en rojo, haz clic en la tarjeta para ver quiénes violaron." },
-    { paso:5, t:"Auditar casos específicos", d:"Si un empleado tiene muchas infracciones, ve a 'Auditoría' para ver día por día cómo se calculó." },
-    { paso:6, t:"Exportar para gestión", d:"Genera informe PDF desde 'Políticas' para reuniones. Exporta la memoria (.json) si quieres continuar el análisis después." },
-    { paso:7, t:"Acción en campo", d:"Con los datos de sedes críticas y empleados infractores, el equipo de RH/Ops puede tomar decisiones: ajustar turnos, capacitar supervisores, revisar contratos." },
-  ];
-
-  const faq = [
-    { q:"¿Los datos se guardan en algún lado?", a:"NO. La app funciona solo en la memoria del navegador. Si cierras la pestaña, los datos se pierden. Para conservarlos usa 'Exportar Memoria'." },
-    { q:"¿Por qué me desconecta después de 30 minutos?", a:"Es una medida de seguridad: si dejas la computadora abierta sin actividad, se borra todo para que nadie vea información sensible. Cualquier clic o tecla reinicia el contador." },
-    { q:"¿Puedo cambiar los umbrales de las políticas?", a:"Sí, en Políticas → 'Configurar Parámetros'. Los cambios aplican inmediatamente a Políticas, Riesgo y Tendencia." },
-    { q:"¿Por qué una sede aparece con 0%?", a:"Si el Resumen muestra 0%, es porque el promedio del cumplimiento de sus 9 políticas es 0. Probablemente todos los empleados violaron varias políticas." },
-    { q:"¿Cómo comparo 2 meses diferentes?", a:"En el Resumen verás automáticamente el comparativo mes actual vs anterior. En Tendencia ves la evolución de todos los meses." },
-    { q:"¿Qué pasa si cargo el mismo archivo dos veces?", a:"Se acumulan los datos. Si quieres empezar de cero, usa el botón 'Reiniciar' en el topbar." },
-    { q:"¿Funciona en el celular?", a:"Actualmente la app está optimizada para computador/tablet. En celular se puede ver pero los filtros y tablas son menos cómodos." },
-    { q:"¿Cómo genero un informe para mi jefe?", a:"Ve a Políticas → 'Generar Informe'. Se descarga un HTML que puedes imprimir como PDF. Lleva marca de agua de confidencialidad." },
-    { q:"¿Puedo compartir el archivo .json con otro analista?", a:"Sí. El .json tiene metadata de quién lo generó y cuándo. Es portable entre computadores." },
-    { q:"¿Los cálculos son en tiempo real?", a:"Sí. Cada vez que cambias un filtro o parámetro, los cálculos se recalculan al instante sobre los datos cargados." },
-  ];
-
-  return (
-    <div>
-      <div style={{marginBottom:20}}>
-        <h2 style={{color:C.t,fontSize:20,fontWeight:800,margin:"0 0 4px",fontFamily:"'DM Sans',sans-serif",letterSpacing:"-0.3px"}}>Manual de la Aplicación</h2>
-        <p style={{color:C.td,fontSize:12,margin:0}}>Guía completa: vistas, filtros, exportación, ediciones y metodología</p>
-      </div>
-
-      <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:20,padding:"10px 12px",borderRadius:14,background:C.sf,border:"1px solid "+C.bd,boxShadow:"0 1px 4px rgba(0,0,0,0.03)"}}>
-        {secciones.map(function(s){
-          var act = seccionAbierta === s.id;
-          return (
-            <button key={s.id} onClick={function(){setSeccionAbierta(s.id);}}
-              style={{padding:"8px 14px",borderRadius:10,fontSize:12,fontWeight:act?700:500,
-                background:act?C.p:"transparent",border:"1.5px solid "+(act?C.p:C.bd),
-                color:act?"#fff":C.tm,cursor:"pointer",transition:"all 0.2s",
-                fontFamily:"'DM Sans',sans-serif",
-                boxShadow:act?"0 2px 8px rgba(26,122,46,0.2)":"none"}}>{s.t}</button>
-          );
-        })}
-      </div>
-
-      {seccionAbierta === "vistas" && (
-        <div>
-          <div style={{padding:16,borderRadius:12,background:C.pg,border:"1px solid "+C.bd,marginBottom:16}}>
-            <p style={{color:C.t,fontSize:13,margin:0,lineHeight:"1.6"}}>La app tiene <b>9 vistas principales</b> en la barra lateral. Cada una está diseñada para un propósito específico.</p>
-          </div>
-          {vistas.map(function(v,i){
-            return (
-              <div key={i} style={{padding:18,borderRadius:12,background:C.sf,border:"1px solid "+C.bd,marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-                  <div style={{width:32,height:32,borderRadius:8,background:C.pg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>{v.icono}</div>
-                  <span style={{color:C.t,fontSize:15,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{v.nombre}</span>
-                </div>
-                <p style={{color:C.tm,fontSize:12,lineHeight:"1.6",margin:"0 0 10px 0"}}>{v.desc}</p>
-                {v.acepta && (
-                  <div style={{paddingLeft:12,borderLeft:"2px solid "+C.bd}}>
-                    <div style={{fontSize:11,fontWeight:700,color:C.td,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.5px"}}>Qué encontrarás aquí:</div>
-                    {v.acepta.map(function(item,j){
-                      return <div key={j} style={{fontSize:12,color:C.tm,marginBottom:4,lineHeight:"1.5"}}>• {item}</div>;
-                    })}
-                  </div>
-                )}
-                {v.accion && <div style={{marginTop:10,padding:10,borderRadius:8,background:C.pg,fontSize:11,color:C.p,fontWeight:600}}>💡 {v.accion}</div>}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {seccionAbierta === "filtros" && (
-        <div>
-          <div style={{padding:16,borderRadius:12,background:C.pg,border:"1px solid "+C.bd,marginBottom:16}}>
-            <p style={{color:C.t,fontSize:13,margin:0,lineHeight:"1.6"}}>La app tiene <b>3 tipos de filtros</b> que se pueden combinar.</p>
-          </div>
-          {filtros.map(function(f,i){
-            return (
-              <div key={i} style={{padding:18,borderRadius:12,background:C.sf,border:"1px solid "+C.bd,marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
-                <div style={{color:C.t,fontSize:14,fontWeight:700,marginBottom:6,fontFamily:"'DM Sans',sans-serif"}}>{f.tipo}</div>
-                <div style={{color:C.p,fontSize:11,fontWeight:600,marginBottom:8}}>📍 {f.donde}</div>
-                <p style={{color:C.tm,fontSize:12,lineHeight:"1.6",margin:"0 0 10px 0"}}>{f.desc}</p>
-                {f.permite && (
-                  <div style={{paddingLeft:12,borderLeft:"2px solid "+C.bd}}>
-                    {f.permite.map(function(p,j){
-                      return <div key={j} style={{fontSize:12,color:C.tm,marginBottom:4,lineHeight:"1.5"}}>• {p}</div>;
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          <div style={{padding:14,borderRadius:10,background:"rgba(217,119,6,0.08)",border:"1px solid rgba(217,119,6,0.2)",marginTop:10}}>
-            <div style={{color:C.ac,fontSize:12,fontWeight:700,marginBottom:4}}>⚠️ Importante</div>
-            <p style={{color:C.tm,fontSize:11,margin:0,lineHeight:"1.6"}}>Cuando activas el <b>Filtro Maestro</b>, TODAS las vistas solo muestran los datos filtrados. Los filtros de Pills se aplican SOBRE lo que ya filtró el maestro.</p>
-          </div>
-        </div>
-      )}
-
-      {seccionAbierta === "exportar" && (
-        <div>
-          <div style={{padding:16,borderRadius:12,background:C.pg,border:"1px solid "+C.bd,marginBottom:16}}>
-            <p style={{color:C.t,fontSize:13,margin:0,lineHeight:"1.6"}}>Hay <b>4 tipos de exportación</b>. Todas incluyen marca de agua.</p>
-          </div>
-          {exportar.map(function(e,i){
-            return (
-              <div key={i} style={{padding:18,borderRadius:12,background:C.sf,border:"1px solid "+C.bd,marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
-                <div style={{color:C.t,fontSize:14,fontWeight:700,marginBottom:6,fontFamily:"'DM Sans',sans-serif"}}>{e.que}</div>
-                {e.donde && <div style={{color:C.p,fontSize:11,fontWeight:600,marginBottom:8}}>📍 {e.donde}</div>}
-                <p style={{color:C.tm,fontSize:12,lineHeight:"1.6",margin:"0 0 10px 0"}}>{e.contiene}</p>
-                {e.modos && (
-                  <div style={{paddingLeft:12,borderLeft:"2px solid "+C.bd}}>
-                    {e.modos.map(function(m,j){
-                      return <div key={j} style={{fontSize:12,color:C.tm,marginBottom:4,lineHeight:"1.5"}}>{m}</div>;
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {seccionAbierta === "editable" && (
-        <div>
-          <div style={{padding:16,borderRadius:12,background:C.pg,border:"1px solid "+C.bd,marginBottom:16}}>
-            <p style={{color:C.t,fontSize:13,margin:0,lineHeight:"1.6"}}>La app es una <b>herramienta de análisis</b>. Solo los <b>parámetros de las políticas</b> son editables. Los datos son de solo lectura.</p>
-          </div>
-          {editable.map(function(e,i){
-            return (
-              <div key={i} style={{padding:18,borderRadius:12,background:C.sf,border:"1px solid "+C.bd,marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
-                <div style={{color:C.t,fontSize:14,fontWeight:700,marginBottom:6,fontFamily:"'DM Sans',sans-serif"}}>{e.area}</div>
-                {e.donde && <div style={{color:C.p,fontSize:11,fontWeight:600,marginBottom:10}}>📍 {e.donde}</div>}
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-                  <div style={{padding:10,borderRadius:8,background:"rgba(26,122,46,0.06)",border:"1px solid rgba(26,122,46,0.2)"}}>
-                    <div style={{fontSize:11,fontWeight:700,color:C.p,marginBottom:6}}>✅ Sí Editable</div>
-                    {e.si.map(function(item,j){
-                      return <div key={j} style={{fontSize:11,color:C.tm,marginBottom:3,lineHeight:"1.5"}}>• {item}</div>;
-                    })}
-                  </div>
-                  {e.no && (
-                    <div style={{padding:10,borderRadius:8,background:"rgba(225,29,72,0.06)",border:"1px solid rgba(225,29,72,0.2)"}}>
-                      <div style={{fontSize:11,fontWeight:700,color:C.dg,marginBottom:6}}>❌ No Editable</div>
-                      {e.no.map(function(item,j){
-                        return <div key={j} style={{fontSize:11,color:C.tm,marginBottom:3,lineHeight:"1.5"}}>• {item}</div>;
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {seccionAbierta === "politicas" && (
-        <div>
-          <div style={{padding:16,borderRadius:12,background:C.pg,border:"1px solid "+C.bd,marginBottom:16}}>
-            <p style={{color:C.t,fontSize:13,margin:0,lineHeight:"1.6"}}>La app evalúa <b>9 políticas</b> organizadas en 3 niveles: diarias, semanales y mensuales.</p>
-          </div>
-          {politicas.map(function(p){
-            return (
-              <div key={p.num} style={{padding:18,borderRadius:12,background:C.sf,border:"1px solid "+C.bd,marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
-                  <div style={{width:36,height:36,borderRadius:9,background:C.p,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:9,fontWeight:800,lineHeight:1}}>
-                    <div>POL</div><div style={{fontSize:13}}>{p.num}</div>
-                  </div>
-                  <div style={{flex:1,minWidth:200}}>
-                    <div style={{color:C.t,fontSize:14,fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}>{p.nombre}</div>
-                    <div style={{color:C.td,fontSize:11}}>Sigla: <b>{p.sigla}</b> · {p.nivel} · {p.aplica}</div>
-                  </div>
-                </div>
-                <p style={{color:C.tm,fontSize:12,lineHeight:"1.6",margin:"0 0 10px 0"}}>{p.desc}</p>
-                <div style={{padding:10,borderRadius:8,background:C.sa,border:"1px solid "+C.bd,marginBottom:6}}>
-                  <div style={{fontSize:10,fontWeight:700,color:C.td,textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:3}}>Fórmula</div>
-                  <div style={{fontSize:12,color:C.t,fontFamily:"monospace"}}>{p.formula}</div>
-                </div>
-                <div style={{padding:10,borderRadius:8,background:C.pg,border:"1px solid "+C.bd}}>
-                  <div style={{fontSize:10,fontWeight:700,color:C.p,textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:3}}>Valores por defecto</div>
-                  <div style={{fontSize:12,color:C.tm}}>{p.defaults}</div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {seccionAbierta === "conceptos" && (
-        <div>
-          <div style={{padding:16,borderRadius:12,background:C.pg,border:"1px solid "+C.bd,marginBottom:16}}>
-            <p style={{color:C.t,fontSize:13,margin:0,lineHeight:"1.6"}}>Glosario de términos usados en la app.</p>
-          </div>
-          {conceptos.map(function(c,i){
-            return (
-              <div key={i} style={{padding:14,borderRadius:10,background:C.sf,border:"1px solid "+C.bd,marginBottom:8,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
-                <div style={{color:C.t,fontSize:13,fontWeight:700,marginBottom:4,fontFamily:"'DM Sans',sans-serif"}}>{c.t}</div>
-                <p style={{color:C.tm,fontSize:12,lineHeight:"1.6",margin:0}}>{c.d}</p>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {seccionAbierta === "flujo" && (
-        <div>
-          <div style={{padding:16,borderRadius:12,background:C.pg,border:"1px solid "+C.bd,marginBottom:16}}>
-            <p style={{color:C.t,fontSize:13,margin:0,lineHeight:"1.6"}}>Secuencia recomendada para aprovechar la app al máximo.</p>
-          </div>
-          {flujo.map(function(f,i){
-            return (
-              <div key={i} style={{padding:18,borderRadius:12,background:C.sf,border:"1px solid "+C.bd,marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,0.04)",display:"flex",gap:14,alignItems:"flex-start"}}>
-                <div style={{width:40,height:40,borderRadius:"50%",background:"linear-gradient(135deg,#1a7a2e,#34d399)",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:16,fontWeight:800,flexShrink:0,boxShadow:"0 2px 8px rgba(26,122,46,0.25)"}}>{f.paso}</div>
-                <div style={{flex:1}}>
-                  <div style={{color:C.t,fontSize:14,fontWeight:700,marginBottom:4,fontFamily:"'DM Sans',sans-serif"}}>{f.t}</div>
-                  <p style={{color:C.tm,fontSize:12,lineHeight:"1.6",margin:0}}>{f.d}</p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {seccionAbierta === "faq" && (
-        <div>
-          <div style={{padding:16,borderRadius:12,background:C.pg,border:"1px solid "+C.bd,marginBottom:16}}>
-            <p style={{color:C.t,fontSize:13,margin:0,lineHeight:"1.6"}}>Respuestas a las dudas más comunes.</p>
-          </div>
-          {faq.map(function(item,i){
-            return (
-              <div key={i} style={{padding:16,borderRadius:12,background:C.sf,border:"1px solid "+C.bd,marginBottom:8,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
-                <div style={{color:C.t,fontSize:13,fontWeight:700,marginBottom:6,fontFamily:"'DM Sans',sans-serif"}}>❓ {item.q}</div>
-                <p style={{color:C.tm,fontSize:12,lineHeight:"1.6",margin:"0 0 0 18px"}}>{item.a}</p>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-/* ============================================================
-   AUDITORIA VIEW — paso a paso de cálculos por empleado
-   ============================================================ */
-/* ============================================================
-   1. EFICIENCIA VIEW — Personal vs Ventas por hora/sede
-   ============================================================ */
-function EficienciaView({ marc, fact }) {
-  const optsEfi = useMemo(() => {
-    const ORD = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-    const sedes = {}, secciones = {}, clases = {}, meses = {}, semanas = {}, dias = {}, areas = {};
-    marc.forEach(m => {
-      if (m.DEPENDENCIA) sedes[m.DEPENDENCIA] = 1;
-      if (m.CENTROCOSTO) secciones[m.CENTROCOSTO] = 1;
-      if (m.MES) meses[m.MES] = 1;
-      if (m.SEMANA) semanas[m.SEMANA] = 1;
-      if (m.DIA != null && String(m.DIA) !== "undefined" && String(m.DIA) !== "") dias[String(m.DIA)] = 1;
-    });
-    fact.forEach(f => {
-      if (f.sede) sedes[f.sede] = 1;
-      if (f.clase) clases[f.clase] = 1;
-      if (f.seccion) areas[f.seccion] = 1; // Area de productos
-      if (f.mes) meses[f.mes] = 1;
-      if (f.dia != null && f.dia > 0) dias[String(f.dia)] = 1;
-    });
-    return {
-      sedes: ["Todas", ...Object.keys(sedes).sort()],
-      secciones: ["Todas", ...Object.keys(secciones).sort()],
-      areas: ["Todas", ...Object.keys(areas).sort()],
-      clases: ["Todas", ...Object.keys(clases).sort()],
-      meses: (function(){ return ["Todos", ...Object.keys(meses).sort(function(a,b){ return ORD.indexOf(a.toLowerCase().trim()) - ORD.indexOf(b.toLowerCase().trim()); })]; })(),
-      diasSemana: ["Todos", "Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"],
-      semanas: ["Todas", ...Object.keys(semanas)],
-      dias: ["Todos", ...Object.keys(dias).sort((a, b) => (+a) - (+b))],
-    };
-  }, [marc, fact]);
-
-  const filtrosDefault = { sede:"Todas", seccion:"Todas", area:"Todas", clase:"Todas", mes:"Todos", dsem:"Todos", semana:"Todas", dia:"Todos", quincena:"Todos" };
-  const [f, setF] = useState(filtrosDefault);
-  const aplicar = (k, v) => setF(prev => Object.assign({}, prev, (function(){ var o={}; o[k]=v; return o; })()));
-  const limpiar = () => setF(filtrosDefault);
-
-  const marcFilt = useMemo(() => {
-    const qv = f.quincena !== "Todos" ? (f.quincena === "Quincena" ? "Si" : "No") : null;
-    return marc.filter(m => {
-      if (f.sede    !== "Todas"  && m.DEPENDENCIA !== f.sede)    return false;
-      if (f.seccion !== "Todas"  && m.CENTROCOSTO !== f.seccion) return false;
-      if (f.mes     !== "Todos"  && m.MES         !== f.mes)     return false;
-      if (f.dsem    !== "Todos"  && m.DIA_SEMANA  !== f.dsem)    return false;
-      if (f.semana  !== "Todas"  && m.SEMANA      !== f.semana)  return false;
-      if (f.dia     !== "Todos"  && String(m.DIA) !== f.dia)     return false;
-      if (qv !== null            && m.QUINCENA    !== qv)        return false;
-      return true;
-    });
-  }, [marc, f]);
-
-  const factFilt = useMemo(() => {
-    return fact.filter(x => {
-      if (f.sede  !== "Todas" && x.sede    !== f.sede)  return false;
-      if (f.clase !== "Todas" && x.clase   !== f.clase) return false;
-      if (f.area  !== "Todas" && x.seccion !== f.area)  return false;
-      if (f.mes   !== "Todos" && x.mes     !== f.mes)   return false;
-      if (f.dia   !== "Todos" && String(x.dia) !== f.dia) return false;
-      return true;
-    });
-  }, [fact, f]);
-
-  const datos = useMemo(() => {
-    const fm = marcFilt;
-    const ff = factFilt;
-    const fechas = {}; fm.forEach(m => { fechas[m.FECHA]=1; });
-    const nd = Math.max(Object.keys(fechas).length, 1);
-    return HC.map((hc, i) => {
-      const hNum = HC_NUM[i];
-      const personal = fm.reduce((s,m) => s+(m[hc]||0), 0) / nd;
-      const factH = ff.filter(fx => fx.hora === hNum);
-      const diasF = {}; factH.forEach(fx => { diasF[fx.dia+"_"+fx.mes]=1; });
-      const ndf = Math.max(Object.keys(diasF).length, 1);
-      const ventas = factH.reduce((s,fx) => s+(fx.nfact||0), 0) / ndf;
-      const eficiencia = personal > 0 ? Math.round((ventas/personal)*10)/10 : 0;
-      return { hora: HL[i], hNum, personal: Math.round(personal*10)/10, ventas: Math.round(ventas*10)/10, eficiencia };
-    });
-  }, [marcFilt, factFilt]);
-
-  const rankingSedes = useMemo(() => {
-    // Group data by sede in one pass instead of filtering per sede
-    const bySedeMarc = {}, bySedeFact = {};
-    marcFilt.forEach(m => {
-      var s = m.DEPENDENCIA; if (!s) return;
-      if (!bySedeMarc[s]) bySedeMarc[s] = [];
-      bySedeMarc[s].push(m);
-    });
-    factFilt.forEach(f => {
-      var s = f.sede; if (!s) return;
-      if (!bySedeFact[s]) bySedeFact[s] = [];
-      bySedeFact[s].push(f);
-    });
-    return optsEfi.sedes.filter(s=>s!=="Todas").map(s => {
-      var fm = bySedeMarc[s] || [];
-      var ff = bySedeFact[s] || [];
-      var fechas={}; fm.forEach(m=>{fechas[m.FECHA]=1;});
-      var nd = Math.max(Object.keys(fechas).length,1);
-      var totalPersonal = fm.reduce((sum,m) => { var p=0; HC.forEach(hc=>{p+=(m[hc]||0);}); return sum+p; },0)/nd;
-      var diasF={}; ff.forEach(fx=>{diasF[fx.dia+"_"+fx.mes]=1;});
-      var ndf = Math.max(Object.keys(diasF).length,1);
-      var ventas = ff.reduce((sum,fx)=>sum+(fx.nfact||0),0)/ndf;
-      var ef = totalPersonal>0 ? Math.round((ventas/totalPersonal)*10)/10 : 0;
-      return { sede:s, personal:Math.round(totalPersonal), ventas:Math.round(ventas), eficiencia:ef };
-    }).sort((a,b) => b.eficiencia-a.eficiencia);
-  }, [marcFilt, factFilt, optsEfi.sedes]);
-
-  const hasFact = fact.length > 0;
-  const hasMarc = marc.length > 0;
-
-  const filtrosVisibles = [];
-  if (optsEfi.sedes.length > 1) filtrosVisibles.push({ label:"Sede", key:"sede", opts:optsEfi.sedes });
-  if (hasMarc && optsEfi.secciones.length > 1) filtrosVisibles.push({ label:"Seccion", key:"seccion", opts:optsEfi.secciones });
-  if (hasFact && optsEfi.areas.length > 1) filtrosVisibles.push({ label:"Area", key:"area", opts:optsEfi.areas });
-  if (hasFact && optsEfi.clases.length > 1) filtrosVisibles.push({ label:"Clase", key:"clase", opts:optsEfi.clases });
-  if (optsEfi.meses.length > 1) filtrosVisibles.push({ label:"Mes", key:"mes", opts:optsEfi.meses });
-  if (hasMarc) filtrosVisibles.push({ label:"DiaSem", key:"dsem", opts:optsEfi.diasSemana });
-  if (hasMarc && optsEfi.semanas.length > 1) filtrosVisibles.push({ label:"Semana", key:"semana", opts:optsEfi.semanas });
-  if (optsEfi.dias.length > 1) filtrosVisibles.push({ label:"Dia", key:"dia", opts:optsEfi.dias });
-  if (hasMarc) filtrosVisibles.push({ label:"Quincena", key:"quincena", opts:["Todos","Quincena","No Quincena"] });
-
-  return (
-    <div>
-      <div style={{marginBottom:20}}>
-        <h2 style={{color:C.w,fontSize:18,fontWeight:800,margin:"0 0 4px"}}>Eficiencia: Personal ↔ Ventas</h2>
-        <p style={{color:C.td,fontSize:12,margin:0}}>¿En qué horas tienes más personal del necesario? ¿Cuándo falta cobertura?</p>
-      </div>
-
-      <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:20,padding:10,borderRadius:10,background:"rgba(255,255,255,0.85)",border:"1px solid "+C.bd}}>
-        {filtrosVisibles.map(fp => (
-          <Pill key={fp.key} label={fp.label} value={f[fp.key]} options={fp.opts} onChange={function(v){aplicar(fp.key,v);}} />
-        ))}
-        <button onClick={limpiar} style={{padding:"6px 10px",borderRadius:7,fontSize:10,background:C.sa,border:"1px solid "+C.bd,color:C.tm,cursor:"pointer",marginLeft:6}}>Limpiar</button>
-      </div>
-
-      {!hasFact && (
-        <div style={{padding:"14px 18px",borderRadius:12,background:"rgba(180,83,9,0.08)",border:"1px solid rgba(180,83,9,0.25)",marginBottom:20,display:"flex",gap:12,alignItems:"center"}}>
-          <span style={{fontSize:18}}>⚠️</span>
-          <div>
-            <div style={{fontWeight:700,color:C.ac,fontSize:13}}>Sin datos de ventas</div>
-            <div style={{color:C.td,fontSize:11,marginTop:2}}>Carga el archivo FACTURAS.xlsx para ver la correlación ventas/personal. Por ahora se muestra solo la cobertura de personal por hora.</div>
-          </div>
-        </div>
-      )}
-
-      <div style={{padding:"20px",borderRadius:14,background:C.sf,border:"1px solid "+C.bd,boxShadow:"0 1px 4px rgba(31,107,46,0.07)",marginBottom:20}}>
-        <div style={{marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-          <div>
-            <div style={{fontWeight:700,fontSize:14,color:C.t}}>Personal vs Transacciones por Hora</div>
-            <div style={{fontSize:11,color:C.td,marginTop:2}}>Promedio diario · {f.sede!=="Todas"?f.sede:"todas las sedes"} · {f.mes!=="Todos"?f.mes:"todos los meses"}</div>
-          </div>
-          <div style={{display:"flex",gap:16,fontSize:11,color:C.td,flexWrap:"wrap"}}>
-            <span><span style={{display:"inline-block",width:10,height:10,borderRadius:2,background:"#1f6b2e",marginRight:4}}/>Personas presentes</span>
-            {hasFact && <span><span style={{display:"inline-block",width:10,height:10,borderRadius:2,background:"#f59e0b",marginRight:4}}/>Transacciones de venta</span>}
-            {hasFact && <span><span style={{display:"inline-block",width:10,height:10,borderRadius:"50%",background:"#3b82f6",marginRight:4}}/>Eficiencia (ventas por persona)</span>}
-          </div>
-        </div>
-        <ResponsiveContainer width="100%" height={280}>
-          <ComposedChart data={datos} margin={{top:8,right:30,bottom:0,left:0}}>
-            <CartesianGrid strokeDasharray="3 3" stroke={C.bd} />
-            <XAxis dataKey="hora" tick={{fontSize:10,fill:C.td}} />
-            <YAxis yAxisId="izq" tick={{fontSize:10,fill:C.td}} label={{value:"Personas",angle:-90,position:"insideLeft",fill:C.td,fontSize:10}} />
-            {hasFact && <YAxis yAxisId="der" orientation="right" tick={{fontSize:10,fill:C.td}} label={{value:"Transacciones",angle:90,position:"insideRight",fill:C.td,fontSize:10}} />}
-            <Tooltip contentStyle={{background:C.sf,border:"1px solid "+C.bd,borderRadius:8,fontSize:11}}
-              formatter={(val,name) => [val, name]} />
-            <Bar yAxisId="izq" dataKey="personal" fill="#1f6b2e" opacity={0.85} radius={[3,3,0,0]} name="Personas presentes" />
-            {hasFact && <Bar yAxisId="izq" dataKey="ventas" fill="#f59e0b" opacity={0.65} radius={[3,3,0,0]} name="Transacciones de venta" />}
-            {hasFact && <Line yAxisId="der" type="monotone" dataKey="eficiencia" stroke="#3b82f6" strokeWidth={2.5} dot={{r:3}} name="Eficiencia (ventas/persona)" />}
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
-
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
-        {[
-          { titulo:"🔴 Posible sobrecobertura", sub:"Muchas personas, pocas transacciones",
-            items: hasFact
-              ? datos.filter(d=>d.personal>0&&d.ventas>=0).sort((a,b)=>(b.personal/Math.max(b.ventas,0.1))-(a.personal/Math.max(a.ventas,0.1))).slice(0,5)
-              : datos.filter(d=>d.personal>0).sort((a,b)=>b.personal-a.personal).slice(0,5),
-            color:C.dg, bg:"rgba(220,38,38,0.06)", border:"rgba(220,38,38,0.2)" },
-          { titulo:"🟢 Horas más productivas", sub:"Mejor ratio transacciones por persona",
-            items: hasFact
-              ? datos.filter(d=>d.eficiencia>0).sort((a,b)=>b.eficiencia-a.eficiencia).slice(0,5)
-              : datos.filter(d=>d.personal>0).sort((a,b)=>b.personal-a.personal).slice(0,5),
-            color:C.p, bg:"rgba(31,107,46,0.06)", border:"rgba(31,107,46,0.2)" },
-        ].map((card,ci) => (
-          <div key={ci} style={{borderRadius:12,border:"1px solid "+card.border,overflow:"hidden",boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-            <div style={{padding:"13px 18px",background:card.bg,borderBottom:"1px solid "+card.border}}>
-              <div style={{fontWeight:700,fontSize:13,color:C.t}}>{card.titulo}</div>
-              <div style={{fontSize:11,color:C.td,marginTop:2}}>{card.sub}</div>
-            </div>
-            <div style={{background:C.sf}}>
-              {card.items.map((d,i) => (
-                <div key={d.hora} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 18px",borderBottom:"1px solid "+C.bd}}>
-                  <span style={{width:26,height:26,borderRadius:6,background:card.bg,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:11,color:card.color,flexShrink:0}}>{i+1}</span>
-                  <span style={{fontWeight:700,fontSize:15,color:C.t,fontFamily:"monospace",width:45}}>{d.hora}</span>
-                  <span style={{fontSize:12,color:C.td,flex:1}}>{d.personal} personas presentes</span>
-                  {hasFact && <span style={{fontSize:12,fontWeight:700,color:card.color}}>{d.eficiencia} ventas/persona</span>}
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {rankingSedes.length > 1 && (
-        <div style={{borderRadius:12,border:"1px solid "+C.bd,overflow:"hidden",boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-          <div style={{padding:"13px 18px",background:"linear-gradient(135deg,#0f1f13,#1f6b2e)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div style={{color:"#e8f5eb",fontWeight:700,fontSize:13}}>Ranking de Sedes por Eficiencia</div>
-            <div style={{color:"#7aab85",fontSize:11}}>{f.mes!=="Todos"?f.mes:"todos los meses"}</div>
-          </div>
-          <div style={{background:C.sf}}>
-            <div style={{display:"grid",gridTemplateColumns:"36px 1fr 120px 140px 160px",gap:0,padding:"10px 18px",borderBottom:"1px solid "+C.bd,background:C.sa}}>
-              {["#","Sede","Personas/día","Ventas/día","Eficiencia"].map((h,i) => (
-                <span key={i} style={{fontSize:10,fontWeight:700,color:C.td,textTransform:"uppercase",letterSpacing:"0.4px"}}>{h}</span>
-              ))}
-            </div>
-            {rankingSedes.map((s,i) => {
-              const pct = Math.round((s.eficiencia / (rankingSedes[0].eficiencia||1))*100);
-              return (
-                <div key={s.sede} style={{display:"grid",gridTemplateColumns:"36px 1fr 120px 140px 160px",gap:0,padding:"13px 18px",borderBottom:"1px solid "+C.bd,alignItems:"center"}}>
-                  <span style={{width:26,height:26,borderRadius:6,background:i===0?"rgba(31,107,46,0.15)":C.sa,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:11,color:i===0?C.p:C.td}}>{i+1}</span>
-                  <span style={{fontWeight:600,fontSize:13,color:C.t,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingRight:12}}>{s.sede}</span>
-                  <span style={{fontSize:12,color:C.tm}}>{s.personal} personas</span>
-                  <span style={{fontSize:12,color:C.tm}}>{s.ventas} ventas</span>
-                  <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <div style={{flex:1,height:6,borderRadius:3,background:C.sa,overflow:"hidden"}}>
-                      <div style={{width:pct+"%",height:"100%",borderRadius:3,background:i===0?C.p:"#6bcf7f"}} />
-                    </div>
-                    <span style={{fontSize:12,fontWeight:700,color:i===0?C.p:C.tm,minWidth:35}}>{s.eficiencia}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ============================================================
-   RIESGO VIEW — Top empleados con más infracciones
-   ============================================================ */
-function RiesgoView({ marc, parametros }) {
-  const params = parametros;
-  const [sedeSel, setSedeSel] = useState("Todas");
-  const [mesSel,  setMesSel]  = useState("Todos");
-  const [polFiltro, setPolFiltro] = useState("Todas");
-  const [detEmp, setDetEmp]   = useState(null);
-
-  const sedes = useMemo(() => { const s={}; marc.forEach(m=>{if(m.DEPENDENCIA)s[m.DEPENDENCIA]=1;}); return ["Todas",...Object.keys(s).sort()]; }, [marc]);
-  const meses = useMemo(() => {
-    const ORD=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-    const s={}; marc.forEach(m=>{if(m.MES)s[m.MES]=1;});
-    return ["Todos",...Object.keys(s).sort((a,b)=>ORD.indexOf(a.toLowerCase().trim())-ORD.indexOf(b.toLowerCase().trim()))];
-  }, [marc]);
-
-  const [riesgoResult, setRiesgoResult] = useState({ politicas: [], ranking: [] });
-  const [riesgoCalc, setRiesgoCalc] = useState(false);
-
-  useEffect(() => {
-    const filtradas = marc.filter(m =>
-      (sedeSel==="Todas"||m.DEPENDENCIA===sedeSel) && (mesSel==="Todos"||m.MES===mesSel)
-    );
-    if (filtradas.length === 0) { setRiesgoResult({ politicas:[], ranking:[] }); return; }
-    setRiesgoCalc(true);
-    const t = setTimeout(() => {
-      const { politicas } = evaluarPoliticas(filtradas, params, "Todas");
-      const empMap = {};
-      politicas.forEach(pol => {
-        pol.violadores.forEach(v => {
-          if (!empMap[v.id]) empMap[v.id] = { id:v.id, nombre:v.nombre, cargo:v.cargo, sede:v.sede, total:0, pols:{}, infracciones:[] };
-          empMap[v.id].total++;
-          empMap[v.id].pols[pol.id] = (empMap[v.id].pols[pol.id]||0)+1;
-          empMap[v.id].infracciones.push({ polId:pol.id, polNombre:pol.nombre, polNum:pol.num, fecha:v.fecha, detalle:v.detalle });
-        });
-      });
-      setRiesgoResult({ politicas, ranking: Object.values(empMap).sort((a,b)=>b.total-a.total) });
-      setRiesgoCalc(false);
-    }, 50);
-    return () => clearTimeout(t);
-  }, [marc, sedeSel, mesSel]);
-
-  const { politicas, ranking } = riesgoResult;
-
-  const polsOpts = ["Todas", ...POLITICAS_DEF.map(p => p.id)];
-  const polLabels = Object.fromEntries(POLITICAS_DEF.map(p => [p.id, "POL "+p.num+" — "+p.nombre]));
-  const rankFiltrado = polFiltro==="Todas" ? ranking : ranking.filter(e=>e.pols[polFiltro]>0);
-  const maxTotal = rankFiltrado[0]?.total || 1;
-  const COLORES_POL = { JEX:"#dc2626",BRK:"#f59e0b",JXC:"#ef4444",TPE:"#8b5cf6",EBR:"#f97316",DBA:"#0ea5e9",HES:"#6366f1",HED:"#d946ef",BMA:"#14b8a6" };
-  const NOMBRES_POL = Object.fromEntries(POLITICAS_DEF.map(p => [p.id, "Política "+p.num+": "+p.nombre]));
-
-  return (
-    <div>
-      <div style={{marginBottom:20}}>
-        <h2 style={{color:C.w,fontSize:18,fontWeight:800,margin:"0 0 4px"}}>Empleados en Riesgo</h2>
-        <p style={{color:C.td,fontSize:12,margin:0}}>Ranking de empleados con más infracciones acumuladas en todas las políticas</p>
-      </div>
-
-      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
-        <Pill label="Sede"    value={sedeSel}   options={sedes}    onChange={setSedeSel} />
-        <Pill label="Mes"     value={mesSel}    options={meses}    onChange={setMesSel} />
-        <Pill label="Política" value={polFiltro} options={polsOpts} onChange={setPolFiltro} />
-        {riesgoCalc
-          ? <span style={{fontSize:11,color:C.p,display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,borderRadius:"50%",border:"2px solid "+C.p,borderTopColor:"transparent",display:"inline-block",animation:"spin 0.7s linear infinite"}} />Calculando...</span>
-          : <span style={{fontSize:11,color:C.td,marginLeft:4}}>{rankFiltrado.length} empleados con infracciones</span>
-        }
-      </div>
-
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:12,marginBottom:20}}>
-        {[
-          { label:"Empleados con infracciones", val:ranking.length, color:"#dc2626", icon:"⚠️" },
-          { label:"Total de infracciones", val:ranking.reduce((s,e)=>s+e.total,0), color:C.dg, icon:"📋" },
-          { label:"Máximo por empleado", val:ranking[0]?.total||0, color:C.ac, icon:"🔺" },
-          { label:"Política más incumplida", val:[...politicas].sort((a,b)=>b.totalViolaciones-a.totalViolaciones)[0]?.id||"-", color:C.p, icon:"📌" },
-        ].map((k,i) => (
-          <div key={i} style={{padding:"16px",borderRadius:12,background:C.sf,border:"1px solid "+C.bd,boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-            <div style={{fontSize:11,color:C.td,marginBottom:6,display:"flex",gap:6,alignItems:"center"}}><span>{k.icon}</span>{k.label}</div>
-            <div style={{fontSize:22,fontWeight:800,color:k.color}}>{k.val}</div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{borderRadius:12,border:"1px solid "+C.bd,overflow:"hidden",boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-        <div style={{padding:"13px 18px",background:"linear-gradient(135deg,#5a0a0a,#991b1b)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <div style={{color:"#fecaca",fontWeight:700,fontSize:13}}>Top {Math.min(rankFiltrado.length,50)} empleados — mayor cantidad de infracciones</div>
-          <div style={{color:"#fca5a5",fontSize:11}}>Haz clic en una fila para ver el detalle completo</div>
-        </div>
-        <div style={{background:C.sf}}>
-          <div style={{display:"grid",gridTemplateColumns:"40px 1fr 130px 90px 1fr",gap:0,padding:"10px 18px",borderBottom:"1px solid "+C.bd,background:C.sa}}>
-            {["#","Empleado","Cargo","Total","Políticas incumplidas"].map((h,i)=>(
-              <span key={i} style={{fontSize:10,fontWeight:700,color:C.td,textTransform:"uppercase",letterSpacing:"0.4px"}}>{h}</span>
-            ))}
-          </div>
-          {rankFiltrado.slice(0,50).map((e,i) => (
-            <div key={e.id} onClick={()=>setDetEmp(e)}
-              style={{display:"grid",gridTemplateColumns:"40px 1fr 130px 90px 1fr",gap:0,padding:"13px 18px",
-                borderBottom:"1px solid "+C.bd,alignItems:"center",cursor:"pointer",transition:"background 0.1s"}}
-              onMouseEnter={ev=>ev.currentTarget.style.background=C.pg}
-              onMouseLeave={ev=>ev.currentTarget.style.background="transparent"}>
-              <span style={{width:28,height:28,borderRadius:7,background:i<3?"rgba(220,38,38,0.12)":C.sa,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:11,color:i<3?C.dg:C.td}}>{i+1}</span>
-              <div style={{minWidth:0,paddingRight:10}}>
-                <div style={{fontWeight:700,fontSize:13,color:C.t,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.nombre}</div>
-                <div style={{fontSize:10,color:C.td,marginTop:1,fontFamily:"monospace"}}>{e.id} · {e.sede}</div>
-              </div>
-              <span style={{fontSize:11,color:C.tm,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.cargo}</span>
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <div style={{flex:1,height:6,borderRadius:3,background:C.sa,overflow:"hidden"}}>
-                  <div style={{width:Math.round(e.total/maxTotal*100)+"%",height:"100%",borderRadius:3,background:C.dg}}/>
-                </div>
-                <span style={{fontSize:14,fontWeight:800,color:C.dg,minWidth:24}}>{e.total}</span>
-              </div>
-              <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-                {Object.entries(e.pols).sort((a,b)=>b[1]-a[1]).map(([pid,cnt])=>(
-                  <span key={pid} style={{padding:"2px 8px",borderRadius:10,fontSize:10,fontWeight:700,
-                    background:(COLORES_POL[pid]||"#888")+"22",color:COLORES_POL[pid]||C.td,
-                    border:"1px solid "+(COLORES_POL[pid]||"#888")+"44",whiteSpace:"nowrap"}}>
-                    {pid} ×{cnt}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ))}
-          {rankFiltrado.length === 0 && (
-            <div style={{padding:40,textAlign:"center",color:C.td,fontSize:13}}>
-              ✅ Sin infracciones registradas con los filtros actuales
-            </div>
-          )}
-        </div>
-      </div>
-
-      {detEmp && (
-        <div style={{position:"fixed",inset:0,zIndex:9000,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setDetEmp(null)}>
-          <div style={{background:C.bg,borderRadius:20,width:"min(800px,94vw)",maxHeight:"85vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 24px 80px rgba(0,0,0,0.4)"}} onClick={e=>e.stopPropagation()}>
-            <div style={{background:"linear-gradient(135deg,#5a0a0a,#991b1b)",padding:"18px 24px",display:"flex",gap:14,alignItems:"center",flexShrink:0}}>
-              <div style={{width:48,height:48,borderRadius:12,background:"rgba(252,165,165,0.2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:800,color:"#fca5a5",flexShrink:0}}>{(detEmp.nombre||"?").charAt(0)}</div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{color:"#fef2f2",fontSize:15,fontWeight:800,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{detEmp.nombre}</div>
-                <div style={{color:"#fca5a5",fontSize:12,marginTop:2}}>{detEmp.cargo} · {detEmp.sede} · Identificación: {detEmp.id}</div>
-              </div>
-              <div style={{textAlign:"right",flexShrink:0,marginRight:10}}>
-                <div style={{color:"#fca5a5",fontSize:26,fontWeight:800}}>{detEmp.total}</div>
-                <div style={{color:"#fecaca",fontSize:10}}>infracciones totales</div>
-              </div>
-              <button onClick={()=>setDetEmp(null)} style={{width:34,height:34,borderRadius:8,background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",color:"#fef2f2",fontSize:20,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
-            </div>
-            <div style={{overflowY:"auto",padding:"20px 24px",display:"flex",flexDirection:"column",gap:10}}>
-              <p style={{color:C.td,fontSize:12,margin:"0 0 4px"}}>Historial completo de infracciones registradas</p>
-              {detEmp.infracciones.map((d,i)=>(
-                <div key={i} style={{padding:"13px 16px",borderRadius:10,background:C.sf,border:"1px solid "+C.bd,display:"flex",gap:12,alignItems:"flex-start"}}>
-                  <span style={{padding:"3px 10px",borderRadius:10,fontSize:10,fontWeight:700,
-                    background:(COLORES_POL[d.polId]||"#888")+"22",color:COLORES_POL[d.polId]||C.td,
-                    border:"1px solid "+(COLORES_POL[d.polId]||"#888")+"44",flexShrink:0,marginTop:1,whiteSpace:"nowrap"}}>
-                    POL {d.polNum}
-                  </span>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontWeight:700,fontSize:13,color:C.t,marginBottom:3}}>{d.polNombre}</div>
-                    <div style={{fontSize:12,color:C.td,marginBottom:3}}>{d.detalle}</div>
-                    <div style={{fontSize:11,color:C.td,fontFamily:"monospace"}}>Fecha: {d.fecha}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ============================================================
-   TENDENCIA VIEW — Evolución mes a mes
-   ============================================================ */
-function TendenciaView({ marc, parametros }) {
-  const params = parametros;
-  const [sedeSel, setSedeSel] = useState("Todas");
-  const [polSel,  setPolSel]  = useState("Todas");
-
-  const sedes = useMemo(() => { const s={}; marc.forEach(m=>{if(m.DEPENDENCIA)s[m.DEPENDENCIA]=1;}); return ["Todas",...Object.keys(s).sort()]; }, [marc]);
-  const ORD_MES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-
-  const [tendencia, setTendencia] = useState({ series:[], hayPocosDatos:true });
-  const [tendCalc, setTendCalc] = useState(false);
-
-  useEffect(() => {
-    const mesesSet={}; marc.forEach(m=>{if(m.MES)mesesSet[m.MES]=1;});
-    const mesesLista = Object.keys(mesesSet).sort((a,b)=>ORD_MES.indexOf(a.toLowerCase().trim())-ORD_MES.indexOf(b.toLowerCase().trim()));
-    if (mesesLista.length < 2) { setTendencia({ series:[], hayPocosDatos:true }); return; }
-    setTendCalc(true);
-    let cancelled = false;
-    /* Procesar un mes a la vez de forma async */
-    const cache = {}; /* mes -> politicas */
-    let mi = 0;
-    function nextMes() {
-      if (cancelled) return;
-      if (mi < mesesLista.length) {
-        const mes = mesesLista[mi];
-        const filtradas = marc.filter(m => (sedeSel==="Todas"||m.DEPENDENCIA===sedeSel) && m.MES===mes);
-        cache[mes] = filtradas.length > 0 ? evaluarPoliticas(filtradas, params, "Todas").politicas : null;
-        mi++;
-        if (!cancelled) setTimeout(nextMes, 0);
-      } else {
-        const series = POLITICAS_DEF.map(pd => ({
-          id:pd.id, num:pd.num, nombre:pd.nombre,
-          datos: mesesLista.map(mes => {
-            if (!cache[mes]) return { mesLabel:mes.charAt(0).toUpperCase()+mes.slice(1,3), cumplimiento:null };
-            const pol = cache[mes].find(p=>p.id===pd.id);
-            return { mesLabel:mes.charAt(0).toUpperCase()+mes.slice(1,3), cumplimiento:pol?.cumplimiento??100 };
-          })
-        }));
-        if (!cancelled) { setTendencia({ series, hayPocosDatos:false }); setTendCalc(false); }
-      }
-    }
-    var t = setTimeout(nextMes, 50);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [marc, sedeSel]);
-
-  const polsOpts = ["Todas", ...POLITICAS_DEF.map(p=>p.id)];
-  const seriesFiltradas = useMemo(() =>
-    polSel==="Todas" ? tendencia.series : tendencia.series.filter(s=>s.id===polSel)
-  , [tendencia.series, polSel]);
-
-  const chartData = useMemo(() => {
-    if (!tendencia.series.length) return [];
-    const puntosBase = tendencia.series[0].datos;
-    return puntosBase.map((d, idx) => {
-      const punto = { mes: d.mesLabel };
-      seriesFiltradas.forEach(s => { punto[s.id] = s.datos[idx]?.cumplimiento ?? null; });
-      if (polSel==="Todas") {
-        const vals = seriesFiltradas.map(s=>s.datos[idx]?.cumplimiento).filter(v=>v!==null);
-        punto["PROMEDIO"] = vals.length ? Math.round(vals.reduce((a,b)=>a+b,0)/vals.length) : null;
-      }
-      return punto;
-    });
-  }, [tendencia.series, seriesFiltradas, polSel]);
-
-  const COLORES = ["#1f6b2e","#3b82f6","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#f97316","#10b981","#d946ef"];
-
-  return (
-    <div>
-      <div style={{marginBottom:20}}>
-        <h2 style={{color:C.w,fontSize:18,fontWeight:800,margin:"0 0 4px"}}>Tendencia de Cumplimiento</h2>
-        <p style={{color:C.td,fontSize:12,margin:0}}>¿Las políticas están mejorando o empeorando mes a mes?</p>
-      </div>
-
-      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
-        <Pill label="Sede"     value={sedeSel} options={sedes}    onChange={setSedeSel} />
-        <Pill label="Política" value={polSel}  options={polsOpts} onChange={setPolSel} />
-        {tendCalc && <span style={{fontSize:11,color:C.p,display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,borderRadius:"50%",border:"2px solid "+C.p,borderTopColor:"transparent",display:"inline-block",animation:"spin 0.7s linear infinite"}} />Procesando meses...</span>}
-      </div>
-
-      {tendencia.hayPocosDatos ? (
-        <div style={{padding:"60px 40px",textAlign:"center",borderRadius:14,border:"2px dashed "+C.bd,background:C.sa}}>
-          <div style={{fontSize:40,marginBottom:14}}>📅</div>
-          <div style={{fontWeight:700,fontSize:15,color:C.tm,marginBottom:8}}>Se necesitan datos de al menos 2 meses</div>
-          <div style={{fontSize:13,color:C.td}}>Carga archivos de marcaciones de más de un mes para ver la evolución del cumplimiento</div>
-        </div>
-      ) : (
-        <>
-          <div style={{padding:"20px",borderRadius:14,background:C.sf,border:"1px solid "+C.bd,boxShadow:"0 1px 4px rgba(31,107,46,0.07)",marginBottom:20}}>
-            <div style={{marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-              <div>
-                <div style={{fontWeight:700,fontSize:14,color:C.t}}>Porcentaje de cumplimiento por mes</div>
-                <div style={{fontSize:11,color:C.td,marginTop:2}}>{polSel==="Todas"?"Todas las políticas":POLITICAS_DEF.find(p=>p.id===polSel)?.nombre||polSel} · {sedeSel}</div>
-              </div>
-              {polSel==="Todas" && <span style={{padding:"4px 12px",borderRadius:20,fontSize:11,fontWeight:600,background:"rgba(0,0,0,0.05)",color:C.td,border:"1px solid "+C.bd}}>Línea negra punteada = promedio de todas las políticas</span>}
-            </div>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={chartData} margin={{top:8,right:20,bottom:0,left:0}}>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.bd} />
-                <XAxis dataKey="mes" tick={{fontSize:11,fill:C.td}} />
-                <YAxis domain={[0,100]} tick={{fontSize:10,fill:C.td}} tickFormatter={v=>v+"%"} />
-                <Tooltip contentStyle={{background:C.sf,border:"1px solid "+C.bd,borderRadius:8,fontSize:11}}
-                  formatter={(v,n) => [v!==null?v+"%":"Sin datos", n]} />
-                {seriesFiltradas.map((s,i) => (
-                  <Line key={s.id} type="monotone" dataKey={s.id}
-                    stroke={COLORES[i%COLORES.length]}
-                    strokeWidth={polSel==="Todas"?1.5:3}
-                    dot={{r:polSel==="Todas"?2:5}}
-                    name={"Política "+s.num+": "+s.nombre}
-                    connectNulls />
-                ))}
-                {polSel==="Todas" && (
-                  <Line type="monotone" dataKey="PROMEDIO" stroke="#222" strokeWidth={2.5}
-                    strokeDasharray="6 3" dot={{r:4}} name="Promedio general" connectNulls />
-                )}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div style={{borderRadius:12,border:"1px solid "+C.bd,overflow:"hidden",boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-            <div style={{padding:"13px 18px",background:"linear-gradient(135deg,#0f1f13,#1f6b2e)"}}>
-              <div style={{color:"#e8f5eb",fontWeight:700,fontSize:13}}>Cumplimiento por política y mes</div>
-            </div>
-            <div style={{overflowX:"auto"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",background:C.sf,fontSize:12}}>
-                <thead>
-                  <tr style={{background:C.sa}}>
-                    <th style={{padding:"10px 16px",textAlign:"left",fontWeight:700,color:C.td,fontSize:10,textTransform:"uppercase",borderBottom:"1px solid "+C.bd,whiteSpace:"nowrap",minWidth:200}}>Política</th>
-                    {(tendencia.series[0]?.datos||[]).map((d,i)=>(
-                      <th key={i} style={{padding:"10px 14px",textAlign:"center",fontWeight:700,color:C.td,fontSize:10,textTransform:"uppercase",borderBottom:"1px solid "+C.bd,whiteSpace:"nowrap"}}>{d.mesLabel}</th>
-                    ))}
-                    <th style={{padding:"10px 14px",textAlign:"center",fontWeight:700,color:C.td,fontSize:10,textTransform:"uppercase",borderBottom:"1px solid "+C.bd,whiteSpace:"nowrap"}}>Tendencia</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(polSel==="Todas"?tendencia.series:tendencia.series.filter(s=>s.id===polSel)).map((s,ri)=>{
-                    const vals = s.datos.map(d=>d.cumplimiento).filter(v=>v!==null);
-                    const primero=vals[0]??0, ultimo=vals[vals.length-1]??0;
-                    const diff=ultimo-primero;
-                    const prom=vals.length?Math.round(vals.reduce((a,b)=>a+b,0)/vals.length):0;
-                    return (
-                      <tr key={s.id} style={{borderBottom:"1px solid "+C.bd,background:ri%2===0?"transparent":C.sa}}>
-                        <td style={{padding:"12px 16px",whiteSpace:"nowrap"}}>
-                          <span style={{fontSize:10,color:C.td,marginRight:6,fontWeight:600}}>Pol. {s.num}</span>
-                          <span style={{fontWeight:600,color:C.t}}>{s.nombre}</span>
-                        </td>
-                        {s.datos.map((d,di)=>{
-                          const v=d.cumplimiento;
-                          const bg=v===null?"transparent":v>=90?"rgba(31,107,46,0.1)":v>=70?"rgba(245,158,11,0.1)":"rgba(220,38,38,0.1)";
-                          const col=v===null?C.td:v>=90?C.p:v>=70?C.ac:C.dg;
-                          return (
-                            <td key={di} style={{padding:"12px 14px",textAlign:"center",background:bg}}>
-                              <span style={{fontWeight:700,color:col}}>{v!==null?v+"%":"—"}</span>
-                            </td>
-                          );
-                        })}
-                        <td style={{padding:"12px 14px",textAlign:"center"}}>
-                          <span style={{fontWeight:700,color:diff>0?C.p:diff<0?C.dg:C.td,fontSize:14}}>
-                            {diff>0?"↑ +":diff<0?"↓ ":"→ "}{diff!==0?Math.abs(diff)+"%":"Sin cambio"}
-                          </span>
-                          <div style={{fontSize:10,color:C.td,marginTop:2}}>Promedio: {prom}%</div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function AuditoriaView({ marc: marcaciones = [] }) {
-  const [busq, setBusq] = useState("");
-  const [empSel, setEmpSel] = useState(null);
-  const [diaSel, setDiaSel] = useState(null);
-  const [sedeFiltro, setSedeFiltro] = useState("Todas");
-  const [mesFiltro, setMesFiltro] = useState("Todos");
-
-  const optsAudit = useMemo(() => {
-    const ORD = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-    const sedes = {}, meses = {};
-    marcaciones.forEach(m => { if (m.DEPENDENCIA) sedes[m.DEPENDENCIA]=1; if (m.MES) meses[m.MES]=1; });
-    return {
-      sedes: ["Todas", ...Object.keys(sedes).sort()],
-      meses: ["Todos", ...Object.keys(meses).sort((a,b) => ORD.indexOf(a.toLowerCase().trim()) - ORD.indexOf(b.toLowerCase().trim()))],
-    };
-  }, [marcaciones]);
-
-  const marcFilt = useMemo(() => {
-    return marcaciones.filter(m => {
-      if (sedeFiltro !== "Todas" && m.DEPENDENCIA !== sedeFiltro) return false;
-      if (mesFiltro !== "Todos" && m.MES !== mesFiltro) return false;
-      return true;
-    });
-  }, [marcaciones, sedeFiltro, mesFiltro]);
-
-  const empleados = useMemo(() => {
-    const map = {};
-    marcFilt.forEach((m) => {
-      const id = m.IDENTIFICACION;
-      if (!map[id]) map[id] = { id, nombre: m.EMPLEADO, cargo: m.CARGO, sede: m.DEPENDENCIA, seccion: m.CENTROCOSTO, dias: [] };
-      map[id].dias.push(m);
-    });
-    return Object.values(map).sort((a, b) => (a.nombre || "").localeCompare(b.nombre || ""));
-  }, [marcFilt]);
-
-  const empFiltrados = useMemo(() => {
-    const q = busq.trim().toLowerCase();
-    if (!q) return empleados;
-    return empleados.filter((e) =>
-      (e.nombre && e.nombre.toLowerCase().includes(q)) ||
-      String(e.id).includes(q) ||
-      (e.cargo && e.cargo.toLowerCase().includes(q))
-    );
-  }, [empleados, busq]);
-
-  const diasEmp = useMemo(() => {
-    if (!empSel) return [];
-    return [...empSel.dias].sort((a, b) => (a.FECHA || "").localeCompare(b.FECHA || ""));
-  }, [empSel]);
-
-  const reg = diaSel;
-
-  const jornColor = (tipo) =>
-    tipo === "Sin Marcacion" ? C.ac :
-    (tipo === "Jorn Con" || tipo === "Tur Par Legal") ? C.p : C.dg;
-
-  const polColor = (cumple) => cumple
-    ? { bg:"rgba(31,107,46,0.09)", border:"rgba(31,107,46,0.25)", text:C.p, icon:"✓" }
-    : { bg:"rgba(220,38,38,0.07)", border:"rgba(220,38,38,0.25)", text:C.dg, icon:"✗" };
-
-  const abrirModal = (emp) => { setEmpSel(emp); setDiaSel(emp.dias.length > 0 ? [...emp.dias].sort((a,b)=>(a.FECHA||"").localeCompare(b.FECHA||""))[0] : null); };
-  const cerrarModal = () => { setEmpSel(null); setDiaSel(null); };
-
-  // ── Estadísticas rápidas del empleado ──
-  const statsEmp = (emp) => {
-    const total = emp.dias.length;
-    const sinMrc = emp.dias.filter(d => d.TIPO_JORNADA === "Sin Marcacion").length;
-    const tpIleg = emp.dias.filter(d => d.TIPO_JORNADA === "Tur Par Ilegal").length;
-    return { total, sinMrc, tpIleg };
-  };
-
-  return (
-    <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 120px)"}}>
-
-      {/* ── CABECERA ── */}
-      <div style={{marginBottom:16}}>
-        <h2 style={{color:C.w,fontSize:18,fontWeight:800,margin:"0 0 4px",letterSpacing:"-0.3px"}}>Auditoría de Cálculos</h2>
-        <p style={{color:C.td,fontSize:12,margin:0}}>{empleados.length} empleados · Selecciona uno para ver el detalle de su jornada paso a paso</p>
-      </div>
-
-      {/* ── FILTROS ── */}
-      <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:12,padding:"8px 12px",borderRadius:12,background:C.sf,border:"1px solid "+C.bd,boxShadow:"0 1px 4px rgba(0,0,0,0.03)",alignItems:"center"}}>
-        {optsAudit.sedes.length > 1 && <Pill label="Sede" value={sedeFiltro} options={optsAudit.sedes} onChange={function(v){setSedeFiltro(v);setEmpSel(null);}} />}
-        {optsAudit.meses.length > 1 && <Pill label="Mes" value={mesFiltro} options={optsAudit.meses} onChange={function(v){setMesFiltro(v);setEmpSel(null);}} />}
-      </div>
-
-      {/* ── BUSCADOR ── */}
-      <div style={{position:"relative",marginBottom:16}}>
-        <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:14,color:C.td,pointerEvents:"none"}}>🔍</span>
-        <input
-          value={busq}
-          onChange={(e) => setBusq(e.target.value)}
-          placeholder="Buscar por nombre, ID o cargo..."
-          style={{width:"100%",boxSizing:"border-box",padding:"12px 14px 12px 40px",borderRadius:12,fontSize:13,
-            background:C.sf,border:"1px solid "+C.bd,color:C.t,outline:"none",
-            boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}
-        />
-        {busq && <button onClick={()=>setBusq("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",
-          background:"none",border:"none",cursor:"pointer",color:C.td,fontSize:16,lineHeight:1}}>×</button>}
-      </div>
-      <p style={{color:C.td,fontSize:11,margin:"-10px 0 12px"}}>{empFiltrados.length} resultado{empFiltrados.length!==1?"s":""}</p>
-
-      {/* ── GRID DE EMPLEADOS ── */}
-      <div style={{flex:1,overflowY:"auto"}}>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:12}}>
-          {empFiltrados.map((e) => {
-            const st = statsEmp(e);
-            const tieneProblemas = st.tpIleg > 0 || st.sinMrc > 2;
-            return (
-              <div key={e.id} onClick={() => abrirModal(e)}
-                style={{padding:"16px 18px",borderRadius:14,background:C.sf,border:"1px solid "+C.bd,
-                  cursor:"pointer",transition:"all 0.15s",
-                  boxShadow:"0 1px 4px rgba(31,107,46,0.06)"}}
-                onMouseEnter={e2=>{e2.currentTarget.style.boxShadow="0 4px 16px rgba(31,107,46,0.14)";e2.currentTarget.style.borderColor=C.p;e2.currentTarget.style.transform="translateY(-1px)";}}
-                onMouseLeave={e2=>{e2.currentTarget.style.boxShadow="0 1px 4px rgba(31,107,46,0.06)";e2.currentTarget.style.borderColor=C.bd;e2.currentTarget.style.transform="translateY(0)";}}>
-                {/* Avatar + nombre */}
-                <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
-                  <div style={{width:42,height:42,borderRadius:12,flexShrink:0,
-                    background:tieneProblemas?"rgba(220,38,38,0.1)":"rgba(31,107,46,0.1)",
-                    display:"flex",alignItems:"center",justifyContent:"center",
-                    fontSize:17,fontWeight:800,color:tieneProblemas?C.dg:C.p}}>
-                    {(e.nombre||"?").charAt(0)}
-                  </div>
-                  <div style={{minWidth:0}}>
-                    <div style={{fontWeight:700,fontSize:13,color:C.t,
-                      whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.nombre}</div>
-                    <div style={{fontSize:10,color:C.td,marginTop:2,
-                      whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.cargo||"-"}</div>
-                  </div>
-                </div>
-                {/* Sede */}
-                <div style={{fontSize:11,color:C.tm,marginBottom:10,
-                  whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.sede}</div>
-                {/* Stats */}
-                <div style={{display:"flex",gap:6}}>
-                  <span style={{flex:1,textAlign:"center",padding:"5px 4px",borderRadius:8,
-                    background:C.sa,border:"1px solid "+C.bd}}>
-                    <div style={{fontSize:13,fontWeight:800,color:C.t}}>{st.total}</div>
-                    <div style={{fontSize:9,color:C.td,textTransform:"uppercase",letterSpacing:"0.3px"}}>días</div>
-                  </span>
-                  <span style={{flex:1,textAlign:"center",padding:"5px 4px",borderRadius:8,
-                    background:st.sinMrc>0?"rgba(180,83,9,0.07)":C.sa,
-                    border:"1px solid "+(st.sinMrc>0?"rgba(180,83,9,0.2)":C.bd)}}>
-                    <div style={{fontSize:13,fontWeight:800,color:st.sinMrc>0?C.ac:C.td}}>{st.sinMrc}</div>
-                    <div style={{fontSize:9,color:C.td,textTransform:"uppercase",letterSpacing:"0.3px"}}>sin marc</div>
-                  </span>
-                  <span style={{flex:1,textAlign:"center",padding:"5px 4px",borderRadius:8,
-                    background:st.tpIleg>0?"rgba(220,38,38,0.07)":C.sa,
-                    border:"1px solid "+(st.tpIleg>0?"rgba(220,38,38,0.2)":C.bd)}}>
-                    <div style={{fontSize:13,fontWeight:800,color:st.tpIleg>0?C.dg:C.td}}>{st.tpIleg}</div>
-                    <div style={{fontSize:9,color:C.td,textTransform:"uppercase",letterSpacing:"0.3px"}}>tp ileg</div>
-                  </span>
-                </div>
-                {/* ID */}
-                <div style={{marginTop:10,fontSize:10,color:C.td,fontFamily:"monospace"}}>ID {e.id}</div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ══════════════════════════════════════════
-          MODAL FLOTANTE — detalle del empleado
-          ══════════════════════════════════════════ */}
-      {empSel && (
-        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center"}}
-          onClick={cerrarModal}>
-          {/* Overlay oscuro */}
-          <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.45)",backdropFilter:"blur(2px)"}} />
-
-          {/* Panel lateral deslizante */}
-          <div style={{position:"relative",width:"min(1000px,95vw)",height:"min(90vh,860px)",
-            background:C.bg,display:"flex",flexDirection:"column",
-            borderRadius:20,boxShadow:"0 24px 80px rgba(0,0,0,0.4)",zIndex:1,overflow:"hidden"}}
-            onClick={e=>e.stopPropagation()}>
-
-            {/* ── Header del modal ── */}
-            <div style={{background:"linear-gradient(135deg,#0a1f0d,#1f6b2e)",padding:"20px 24px",
-              display:"flex",alignItems:"center",gap:16,flexShrink:0}}>
-              <div style={{width:52,height:52,borderRadius:14,background:"rgba(74,222,128,0.18)",
-                display:"flex",alignItems:"center",justifyContent:"center",
-                fontSize:22,fontWeight:800,color:"#4ade80",flexShrink:0}}>
-                {(empSel.nombre||"?").charAt(0)}
-              </div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{color:"#e8f5eb",fontSize:16,fontWeight:800,
-                  whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{empSel.nombre}</div>
-                <div style={{color:"#7aab85",fontSize:12,marginTop:3}}>
-                  {empSel.cargo} · {empSel.sede}
-                </div>
-                <div style={{color:"#4ade80",fontSize:11,marginTop:2,fontFamily:"monospace"}}>ID {empSel.id}</div>
-              </div>
-              <button onClick={cerrarModal} style={{width:36,height:36,borderRadius:10,
-                background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",
-                color:"#e8f5eb",fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",
-                justifyContent:"center",flexShrink:0,lineHeight:1}}>×</button>
-            </div>
-
-            {/* ── Cuerpo: lista días + detalle ── */}
-            <div style={{flex:1,display:"flex",overflow:"hidden",minHeight:0}}>
-
-              {/* Lista de días */}
-              <div style={{width:200,flexShrink:0,overflowY:"auto",borderRight:"1px solid "+C.bd,background:C.sf}}>
-                <div style={{padding:"12px 14px",borderBottom:"1px solid "+C.bd,
-                  fontSize:10,fontWeight:700,color:C.td,textTransform:"uppercase",letterSpacing:"0.5px"}}>
-                  {diasEmp.length} días registrados
-                </div>
-                {diasEmp.map((d) => {
-                  const sel = diaSel === d;
-                  const jc = jornColor(d.TIPO_JORNADA);
-                  return (
-                    <div key={d.FECHA+d.DIA_SEMANA} onClick={() => setDiaSel(d)}
-                      style={{padding:"14px 16px",cursor:"pointer",borderBottom:"1px solid "+C.bd,
-                        background:sel?C.pg:"transparent",
-                        borderLeft:"3px solid "+(sel?C.p:"transparent"),transition:"all 0.1s"}}>
-                      <div style={{fontWeight:700,fontSize:13,color:sel?C.p:C.t,marginBottom:2}}>{d.FECHA}</div>
-                      <div style={{fontSize:11,color:C.td,marginBottom:5}}>{d.DIA_SEMANA} · {d.MES}</div>
-                      <div style={{fontSize:11,fontWeight:700,color:jc,marginBottom:3}}>{d.TIPO_JORNADA}</div>
-                      <div style={{fontSize:11,color:C.td,fontFamily:"monospace"}}>
-                        {d.ENTRADA_H} – {d.SALIDA_H} · <b>{d.TOTAL_HORAS}h</b>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Detalle del día */}
-              <div style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
-                {!reg ? (
-                  <div style={{height:"100%",display:"flex",flexDirection:"column",
-                    alignItems:"center",justifyContent:"center",color:C.td,gap:10}}>
-                    <div style={{fontSize:36}}>📅</div>
-                    <div style={{fontSize:14,fontWeight:600,color:C.tm}}>Selecciona un día</div>
-                    <div style={{fontSize:12}}>para ver la auditoría completa</div>
-                  </div>
-                ) : (
-                  <div style={{display:"flex",flexDirection:"column",gap:16}}>
-
-                    {/* Badge fecha */}
-                    <div style={{padding:"16px 20px",borderRadius:14,background:C.sf,
-                      border:"1px solid "+C.bd,display:"flex",alignItems:"center",gap:14,
-                      boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-                      <div style={{flex:1}}>
-                        <div style={{fontSize:18,fontWeight:800,color:C.t}}>{reg.FECHA}</div>
-                        <div style={{fontSize:12,color:C.td,marginTop:3}}>{reg.DIA_SEMANA} · {reg.MES} · Semana {reg.SEMANA}</div>
-                      </div>
-                      <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>
-                        <span style={{padding:"5px 14px",borderRadius:20,fontSize:12,fontWeight:700,
-                          background:"rgba(31,107,46,0.1)",color:C.p,border:"1px solid rgba(31,107,46,0.2)"}}>
-                          {reg.TOTAL_HORAS}h
-                        </span>
-                        <span style={{padding:"5px 14px",borderRadius:20,fontSize:12,fontWeight:700,
-                          color:jornColor(reg.TIPO_JORNADA),background:"rgba(0,0,0,0.04)",
-                          border:"1px solid rgba(0,0,0,0.08)"}}>
-                          {reg.TIPO_JORNADA}
-                        </span>
-                        {reg.QUINCENA==="Si" && <span style={{padding:"5px 14px",borderRadius:20,fontSize:12,fontWeight:700,
-                          background:"rgba(180,83,9,0.08)",color:C.ac,border:"1px solid rgba(180,83,9,0.2)"}}>
-                          Quincena
-                        </span>}
-                      </div>
-                    </div>
-
-                    {/* Grid Marcaciones + Breaks */}
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-                      {/* Marcaciones */}
-                      <div style={{borderRadius:12,border:"1px solid "+C.bd,overflow:"hidden",boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-                        <div style={{background:"#1f6b2e",color:"#fff",padding:"13px 18px",fontSize:12,fontWeight:700,letterSpacing:"0.4px"}}>① MARCACIONES</div>
-                        <div style={{padding:"16px 18px",background:C.sf,display:"flex",flexDirection:"column",gap:12}}>
-                          {[{label:"Entrada",val:reg.ENTRADA_H,color:C.p},{label:"Salida",val:reg.SALIDA_H,color:C.dg}].map((item,i)=>(
-                            <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-                              padding:"12px 14px",borderRadius:9,background:C.sa,border:"1px solid "+C.bd}}>
-                              <span style={{fontSize:12,color:C.td}}>{item.label}</span>
-                              <span style={{fontSize:20,fontWeight:800,color:item.color,fontFamily:"monospace"}}>{item.val}</span>
-                            </div>
-                          ))}
-                          <div style={{padding:"12px 14px",borderRadius:9,
-                            background:(reg.TIPO_JORNADA==="Jorn Con"||reg.TIPO_JORNADA==="Tur Par Legal")?"rgba(31,107,46,0.08)":"rgba(220,38,38,0.07)",
-                            border:"1px solid "+((reg.TIPO_JORNADA==="Jorn Con"||reg.TIPO_JORNADA==="Tur Par Legal")?"rgba(31,107,46,0.2)":"rgba(220,38,38,0.2)")}}>
-                            <div style={{fontSize:10,color:C.td,marginBottom:4,textTransform:"uppercase",letterSpacing:"0.3px"}}>Tipo de jornada</div>
-                            <div style={{fontSize:14,fontWeight:700,color:jornColor(reg.TIPO_JORNADA)}}>{reg.TIPO_JORNADA}</div>
-                            <div style={{fontSize:11,color:C.td,marginTop:4}}>
-                              {reg.TIPO_JORNADA==="Jorn Con"?"Sin turno partido detectado":
-                               reg.TIPO_JORNADA==="Tur Par Legal"?"TP ≥170min (≥2h50m) → legal":
-                               reg.TIPO_JORNADA==="Tur Par Ilegal"?"TP 45–170min → no cumple mínimo legal":
-                               "Sin marcación de entrada/salida"}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Breaks */}
-                      <div style={{borderRadius:12,border:"1px solid "+C.bd,overflow:"hidden",boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-                        <div style={{background:"#166534",color:"#fff",padding:"13px 18px",fontSize:12,fontWeight:700,letterSpacing:"0.4px"}}>② BREAKS</div>
-                        <div style={{padding:"16px 18px",background:C.sf,display:"flex",flexDirection:"column",gap:10}}>
-                          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                            {[
-                              {label:"Breaks cortos",val:reg.BREAKS_CORTOS,sub:"< 45min"},
-                              {label:"Mayor break",val:reg.BREAK_CORTO_MAX_MIN+"min",sub:"individual"},
-                              {label:"Total acumulado",val:reg.BREAK_CORTO_TOTAL_MIN+"min",sub:"breaks cortos"},
-                              {label:"TP ilegales",val:reg.TP_ILEGALES,sub:"45–170min",warn:reg.TP_ILEGALES>0},
-                            ].map((item,i)=>(
-                              <div key={i} style={{padding:"12px",borderRadius:9,
-                                background:item.warn?"rgba(220,38,38,0.07)":C.sa,
-                                border:"1px solid "+(item.warn?"rgba(220,38,38,0.2)":C.bd)}}>
-                                <div style={{fontSize:10,color:C.td,marginBottom:4,textTransform:"uppercase",letterSpacing:"0.3px"}}>{item.label}</div>
-                                <div style={{fontSize:18,fontWeight:800,color:item.warn?C.dg:C.t}}>{item.val}</div>
-                                <div style={{fontSize:10,color:C.td}}>{item.sub}</div>
-                              </div>
-                            ))}
-                          </div>
-                          {reg.BREAK_DETALLE && (
-                            <div style={{padding:"10px 12px",borderRadius:9,background:C.sa,border:"1px solid "+C.bd,
-                              fontSize:11,color:C.tm,lineHeight:1.6}}>
-                              <span style={{fontWeight:700,color:C.td,fontSize:10,textTransform:"uppercase",letterSpacing:"0.3px"}}>Detalle: </span>
-                              {reg.BREAK_DETALLE}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Fórmula horas */}
-                    <div style={{borderRadius:12,border:"1px solid "+C.bd,overflow:"hidden",boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-                      <div style={{background:"#15803d",color:"#fff",padding:"13px 18px",fontSize:12,fontWeight:700,letterSpacing:"0.4px"}}>③ CÁLCULO DE HORAS</div>
-                      <div style={{padding:"20px",background:C.sf}}>
-                        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",
-                          padding:"14px 18px",borderRadius:10,background:C.sa,border:"1px solid "+C.bd,marginBottom:14}}>
-                          <span style={{fontSize:14,fontFamily:"monospace",color:C.td}}>Horas =</span>
-                          <span style={{fontSize:14,fontFamily:"monospace",color:C.t,fontWeight:700}}>( {reg.SALIDA_H} − {reg.ENTRADA_H} )</span>
-                          <span style={{fontSize:14,fontFamily:"monospace",color:C.td}}>−</span>
-                          <span style={{fontSize:14,fontFamily:"monospace",color:C.ac,fontWeight:700}}>{reg.TOTAL_BREAK}h breaks</span>
-                          <span style={{fontSize:14,fontFamily:"monospace",color:C.td}}>=</span>
-                          <span style={{fontSize:22,fontFamily:"monospace",color:C.p,fontWeight:800}}>{reg.TOTAL_HORAS}h</span>
-                        </div>
-                        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
-                          {[
-                            {label:"Horas netas",val:reg.TOTAL_HORAS+"h",color:C.p},
-                            {label:"Break total",val:reg.TOTAL_BREAK+"h ("+Math.round(reg.TOTAL_BREAK*60)+"min)",color:C.ac},
-                            {label:"Quincena",val:reg.QUINCENA==="Si"?"Sí ✓":"No",color:reg.QUINCENA==="Si"?C.ac:C.td},
-                          ].map((item,i)=>(
-                            <div key={i} style={{padding:"14px",borderRadius:9,background:C.sa,border:"1px solid "+C.bd,textAlign:"center"}}>
-                              <div style={{fontSize:10,color:C.td,textTransform:"uppercase",letterSpacing:"0.3px",marginBottom:6}}>{item.label}</div>
-                              <div style={{fontSize:16,fontWeight:800,color:item.color}}>{item.val}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Grilla horaria */}
-                    <div style={{borderRadius:12,border:"1px solid "+C.bd,overflow:"hidden",boxShadow:"0 1px 4px rgba(31,107,46,0.07)"}}>
-                      <div style={{background:"#1a5228",color:"#fff",padding:"13px 18px",fontSize:12,fontWeight:700,letterSpacing:"0.4px"}}>④ GRILLA HORARIA</div>
-                      <div style={{padding:"18px 20px",background:C.sf}}>
-                        <p style={{fontSize:11,color:C.td,margin:"0 0 14px"}}><b>1</b> = presente · <b>0</b> = ausente o en bloque de turno partido</p>
-                        <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-                          {HC.map((hc) => {
-                            const v = reg[hc] || 0;
-                            return (
-                              <div key={hc} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-                                <div style={{fontSize:10,color:C.td,fontFamily:"monospace"}}>{hc}</div>
-                                <div style={{width:46,height:40,borderRadius:8,
-                                  display:"flex",alignItems:"center",justifyContent:"center",
-                                  background:v===1?"rgba(31,107,46,0.15)":"rgba(0,0,0,0.03)",
-                                  border:"1px solid "+(v===1?"rgba(31,107,46,0.35)":C.bd),
-                                  fontWeight:800,fontSize:15,color:v===1?C.p:"#c0c0c0"}}>
-                                  {v}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Políticas */}
-                    <div style={{borderRadius:12,border:"1px solid "+C.bd,overflow:"hidden",boxShadow:"0 1px 4px rgba(31,107,46,0.07)",marginBottom:8}}>
-                      <div style={{background:"#991b1b",color:"#fff",padding:"13px 18px",fontSize:12,fontWeight:700,letterSpacing:"0.4px"}}>⑤ EVALUACIÓN DE POLÍTICAS</div>
-                      <div style={{padding:"16px 18px",background:C.sf,display:"flex",flexDirection:"column",gap:10}}>
-                        {(() => {
-                          const h = reg.TOTAL_HORAS || 0;
-                          const bcMax = reg.BREAK_CORTO_MAX_MIN || 0;
-                          const bcTot = reg.BREAK_CORTO_TOTAL_MIN || 0;
-                          const heD = Math.max(0, h - 8);
-                          // Rangos de breaks (defaults: 13-17 y 28-32)
-                          const breakPairs = reg.BREAK_PAIRS || [];
-                          const breaksCortos = breakPairs.filter(b => b.tipo === "BREAK_CORTO");
-                          const breaksSimulados = breaksCortos.filter(b => b.duracionMin < 8);
-                          const breaksEval = breaksCortos.filter(b => b.duracionMin >= 8);
-                          const enRango = (d) => (d >= 13 && d <= 17) || (d >= 28 && d <= 32);
-                          const breaksFueraRango = breaksEval.filter(b => !enRango(b.duracionMin));
-                          // Anti-fusion
-                          let breaksPegados = false;
-                          if (breaksEval.length >= 2) {
-                            const ord = [...breaksEval].sort((a,b)=>a.salidaH-b.salidaH);
-                            for (let i=1;i<ord.length;i++) {
-                              if ((ord[i].salidaH - ord[i-1].llegadaH) < 2) { breaksPegados = true; break; }
-                            }
-                          }
-                          const pol5Cumple = breaksFueraRango.length === 0 && !breaksPegados;
-                          return [
-                            { id:"POL 1", nombre:"Jornada extendida sin descanso", cumple:!(h>10&&bcTot<8),
-                              detalle: h>10 ? (bcTot<8?`${h}h trabajadas · solo ${bcTot}min break corto (mín. 8min)`:`${h}h con ${bcTot}min break — descanso suficiente`) : `Jornada de ${h}h no supera el umbral de 10h` },
-                            { id:"POL 2", nombre:"Break simulado (menor al mínimo)", cumple: breaksSimulados.length === 0,
-                              detalle: breaksCortos.length===0 ? "Sin breaks cortos registrados" : (breaksSimulados.length>0 ? `${breaksSimulados.length} break(s) simulados (<8min): ${breaksSimulados.map(b=>b.duracionMin+"min").join(", ")}` : `${breaksCortos.length} break(s) registrados, todos ≥ 8min`) },
-                            { id:"POL 3", nombre:"Jornada excesiva (límite 12h)", cumple:h<=12,
-                              detalle: h>12?`${h}h supera el máximo de 12h (excede ${(h-12).toFixed(1)}h)`:`${h}h dentro del límite de 12h` },
-                            { id:"POL 5", nombre:"Break fuera de rango (13-17 o 28-32)", cumple: pol5Cumple,
-                              detalle: breaksEval.length===0 ? "Sin breaks evaluables" : (breaksPegados ? "Breaks pegados: <2h de trabajo entre ellos" : (breaksFueraRango.length>0 ? `${breaksFueraRango.length} break(s) fuera de rango: ${breaksFueraRango.map(b=>b.duracionMin+"min").join(", ")}` : `Todos los breaks dentro de rango válido`)) },
-                            { id:"POL 8", nombre:"Horas extra diarias (límite 2h)", cumple:heD<=2,
-                              detalle: heD>0?(heD>2?`${heD.toFixed(1)}h extra supera límite (8h+2h=10h). Total: ${h}h`:`${heD.toFixed(1)}h extra — dentro del límite de 2h/día`):`Sin horas extra (jornada ≤8h)` },
-                          ].map((pol) => {
-                            const co = polColor(pol.cumple);
-                            return (
-                              <div key={pol.id} style={{display:"flex",gap:14,padding:"14px 16px",
-                                borderRadius:12,background:co.bg,border:"1px solid "+co.border}}>
-                                <div style={{width:28,height:28,borderRadius:8,flexShrink:0,
-                                  background:pol.cumple?"rgba(31,107,46,0.15)":"rgba(220,38,38,0.15)",
-                                  display:"flex",alignItems:"center",justifyContent:"center",
-                                  fontSize:14,fontWeight:800,color:co.text,marginTop:1}}>
-                                  {co.icon}
-                                </div>
-                                <div style={{flex:1}}>
-                                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                                    <span style={{fontSize:10,fontWeight:700,color:co.text,
-                                      background:co.bg,padding:"2px 8px",borderRadius:10,border:"1px solid "+co.border}}>
-                                      {pol.id}
-                                    </span>
-                                    <span style={{fontSize:13,fontWeight:700,color:C.t}}>{pol.nombre}</span>
-                                  </div>
-                                  <div style={{fontSize:12,color:C.td,lineHeight:1.6}}>{pol.detalle}</div>
-                                </div>
-                              </div>
-                            );
-                          });
-                        })()}
-                      </div>
-                    </div>
-
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* === MAIN APP === */
-function ExportModal({ data, filteredData, masterFilter, limpiarMarc, descargarArchivo, userName, onClose }) {
-  var _mode = useState("consolidado"), mode = _mode[0], setMode = _mode[1];
-  var _selSedes = useState(null), selSedes = _selSedes[0], setSelSedes = _selSedes[1];
-  var _progress = useState(null), progress = _progress[0], setProgress = _progress[1];
-  var _busq = useState(""), busq = _busq[0], setBusq = _busq[1];
-  var cancelledRef = useRef(false);
-
-  useEffect(function() {
-    cancelledRef.current = false;
-    return function() { cancelledRef.current = true; };
-  }, []);
-
-  var allSedes = useMemo(function() {
-    var s = {};
-    filteredData.marc.forEach(function(m){ if (m.DEPENDENCIA) s[m.DEPENDENCIA] = (s[m.DEPENDENCIA]||0)+1; });
-    filteredData.fact.forEach(function(f){ if (f.sede) s[f.sede] = s[f.sede]||0; });
-    return Object.keys(s).sort().map(function(sede){ return { sede:sede, marcCount:s[sede]||0 }; });
-  }, [filteredData]);
-
-  var sedesFilt = busq.trim() ? allSedes.filter(function(s){ return s.sede.toLowerCase().indexOf(busq.trim().toLowerCase())>=0; }) : allSedes;
-
-  useEffect(function() {
-    if (mode === "seleccionar" && !selSedes) {
-      var obj = {};
-      allSedes.forEach(function(s){ obj[s.sede] = true; });
-      setSelSedes(obj);
-    }
-  }, [mode, allSedes]);
-
-  var fecha = new Date().toISOString().slice(0,10);
-
-  function generarMemoriaSede(marc, fact, sedeName) {
-    var marcClean = limpiarMarc(marc);
-    return JSON.stringify({_type:"seguimiento_memory",_v:2,sede:sedeName,fecha:fecha,_generadoPor:userName||"Usuario",_confidencial:"Documento confidencial — Supertiendas Cañaveral S.A.",marcaciones:marcClean,facturas:fact});
-  }
-
-  function exportConsolidado() {
-    var marcClean = limpiarMarc(filteredData.marc);
-    var activas = masterFilter.sedes ? Object.keys(masterFilter.sedes).filter(function(k){return masterFilter.sedes[k];}) : [];
-    var etiqSede = activas.length === 1 ? activas[0].replace(/\s+/g,"_") + "_" : (activas.length > 1 ? activas.length + "sedes_" : "");
-    var jsonStr = JSON.stringify({_type:"seguimiento_memory",_v:2,_generadoPor:userName||"Usuario",_confidencial:"Documento confidencial — Supertiendas Cañaveral S.A.",_fecha:fecha,_sedes:activas.length>0?activas:null,marcaciones:marcClean,facturas:filteredData.fact});
-    var nombre = "seguimiento_consolidado_" + etiqSede + fecha + ".json";
-    descargarArchivo(jsonStr, nombre, "application/json");
-    onClose();
-  }
-
-  function exportPorSede(sedesAExportar) {
-    setProgress({ current:0, total:sedesAExportar.length, sede:"" });
-    var idx = 0;
-    function next() {
-      if (cancelledRef.current) return;
-      if (idx >= sedesAExportar.length) { setProgress(null); onClose(); return; }
-      var sede = sedesAExportar[idx];
-      setProgress({ current:idx+1, total:sedesAExportar.length, sede:sede });
-      var marcSede = filteredData.marc.filter(function(m){ return m.DEPENDENCIA === sede; });
-      var factSede = filteredData.fact.filter(function(f){ return f.sede === sede; });
-      var jsonStr = generarMemoriaSede(marcSede, factSede, sede);
-      var nombre = "seguimiento_" + sede.replace(/\s+/g,"_") + "_" + fecha + ".json";
-      descargarArchivo(jsonStr, nombre, "application/json");
-      idx++;
-      if (!cancelledRef.current) setTimeout(next, 400);
-    }
-    setTimeout(next, 200);
-  }
-
-  function exportTodas() { exportPorSede(allSedes.map(function(s){ return s.sede; })); }
-
-  function exportSeleccionadas() {
-    var lista = selSedes ? Object.keys(selSedes).filter(function(k){ return selSedes[k]; }) : [];
-    if (lista.length === 0) { return; }
-    if (lista.length === 1) {
-      var sede = lista[0];
-      var marcSede = filteredData.marc.filter(function(m){ return m.DEPENDENCIA === sede; });
-      var factSede = filteredData.fact.filter(function(f){ return f.sede === sede; });
-      var jsonStr = generarMemoriaSede(marcSede, factSede, sede);
-      descargarArchivo(jsonStr, "seguimiento_" + sede.replace(/\s+/g,"_") + "_" + fecha + ".json", "application/json");
-      onClose();
-    } else {
-      exportPorSede(lista);
-    }
-  }
-
-  function toggleSede(sede) {
-    setSelSedes(function(prev) {
-      var n = Object.assign({}, prev);
-      n[sede] = !n[sede];
-      return n;
-    });
-  }
-
-  var selCount = selSedes ? Object.values(selSedes).filter(Boolean).length : 0;
-
-  return (
-    <div style={{position:"fixed",inset:0,zIndex:9998,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onClose}>
-      <div style={{background:C.sf,borderRadius:20,width:560,maxWidth:"95vw",maxHeight:"85vh",display:"flex",flexDirection:"column",boxShadow:"0 24px 60px rgba(0,0,0,0.3)",border:"1px solid "+C.bd,overflow:"hidden"}} onClick={function(e){e.stopPropagation();}}>
-
-        <div style={{background:"linear-gradient(135deg,#0f1f13,#1f6b2e)",padding:"18px 24px",flexShrink:0}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div>
-              <div style={{color:"#e8f5eb",fontSize:16,fontWeight:800}}>Exportar Memoria Digital</div>
-              <div style={{color:"#7aab85",fontSize:11,marginTop:3}}>{filteredData.marc.length.toLocaleString()} marcaciones · {filteredData.fact.length.toLocaleString()} facturas · {allSedes.length} sedes</div>
-            </div>
-            <button onClick={onClose} style={{width:32,height:32,borderRadius:8,background:"rgba(255,255,255,0.1)",border:"none",color:"#e8f5eb",fontSize:16,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
-          </div>
-        </div>
-
-        {progress ? (
-          <div style={{padding:"40px 24px",textAlign:"center"}}>
-            <div style={{fontSize:14,fontWeight:700,color:C.t,marginBottom:8}}>Exportando sede {progress.current} de {progress.total}</div>
-            <div style={{fontSize:12,color:C.p,marginBottom:16,fontWeight:600}}>{progress.sede}</div>
-            <div style={{height:8,borderRadius:4,background:C.bd,overflow:"hidden",maxWidth:300,margin:"0 auto"}}>
-              <div style={{height:"100%",borderRadius:4,background:C.p,width:Math.round(progress.current/progress.total*100)+"%",transition:"width 0.3s"}} />
-            </div>
-            <div style={{fontSize:11,color:C.td,marginTop:8}}>No cierres esta ventana...</div>
-          </div>
-        ) : (
-          <div style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
-
-            <div style={{display:"flex",gap:8,marginBottom:20}}>
-              {[
-                {id:"consolidado", label:"Consolidado", icon:"📦", desc:"Un solo archivo con todo"},
-                {id:"todas", label:"Todas las sedes", icon:"🏪", desc:"Un archivo por cada sede"},
-                {id:"seleccionar", label:"Seleccionar", icon:"✅", desc:"Elige cuáles exportar"}
-              ].map(function(opt) {
-                var activo = mode === opt.id;
-                return (
-                  <button key={opt.id} onClick={function(){setMode(opt.id);}}
-                    style={{flex:1,padding:"14px 12px",borderRadius:12,border:"2px solid "+(activo?C.p:C.bd),
-                      background:activo?C.pg:"transparent",cursor:"pointer",textAlign:"center",transition:"all 0.15s"}}>
-                    <div style={{fontSize:20,marginBottom:6}}>{opt.icon}</div>
-                    <div style={{fontSize:12,fontWeight:activo?700:500,color:activo?C.p:C.t}}>{opt.label}</div>
-                    <div style={{fontSize:10,color:C.td,marginTop:3}}>{opt.desc}</div>
-                  </button>
-                );
-              })}
-            </div>
-
-            {mode === "consolidado" && (
-              <div style={{padding:16,borderRadius:12,background:C.sa,border:"1px solid "+C.bd}}>
-                <div style={{fontSize:13,fontWeight:600,color:C.t,marginBottom:6}}>Exportar archivo consolidado</div>
-                <div style={{fontSize:11,color:C.td,marginBottom:4}}>Genera un solo archivo .json con todas las marcaciones y facturas filtradas actualmente.</div>
-                <div style={{fontSize:11,color:C.tm}}>Registros: <b>{filteredData.marc.length.toLocaleString()}</b> marcaciones · <b>{filteredData.fact.length.toLocaleString()}</b> facturas</div>
-                {masterFilter.sedes && <div style={{fontSize:11,color:C.p,marginTop:4,fontWeight:600}}>Filtro maestro activo: solo datos filtrados</div>}
-              </div>
-            )}
-
-            {mode === "todas" && (
-              <div style={{padding:16,borderRadius:12,background:C.sa,border:"1px solid "+C.bd}}>
-                <div style={{fontSize:13,fontWeight:600,color:C.t,marginBottom:6}}>Exportar todas las sedes por separado</div>
-                <div style={{fontSize:11,color:C.td,marginBottom:8}}>Genera <b>{allSedes.length}</b> archivos .json, uno por cada sede. Cada archivo contiene solo los datos de esa sede.</div>
-                <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                  {allSedes.map(function(s) {
-                    return <span key={s.sede} style={{padding:"4px 10px",borderRadius:6,fontSize:10,background:C.pg,border:"1px solid "+C.bd,color:C.p,fontWeight:500}}>{s.sede} <span style={{color:C.td}}>({s.marcCount})</span></span>;
-                  })}
-                </div>
-              </div>
-            )}
-
-            {mode === "seleccionar" && (
-              <div>
-                <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"center"}}>
-                  <input value={busq} onChange={function(e){setBusq(e.target.value);}} placeholder="Buscar sede..." style={{flex:1,padding:"8px 12px",borderRadius:8,fontSize:12,background:C.sa,border:"1px solid "+C.bd,color:C.t,outline:"none",boxSizing:"border-box"}} />
-                  <button onClick={function(){var obj={}; allSedes.forEach(function(s){obj[s.sede]=true;}); setSelSedes(obj);}} style={{padding:"6px 10px",borderRadius:6,fontSize:10,border:"1px solid "+C.bd,background:C.sa,color:C.tm,cursor:"pointer"}}>Todas</button>
-                  <button onClick={function(){var obj={}; allSedes.forEach(function(s){obj[s.sede]=false;}); setSelSedes(obj);}} style={{padding:"6px 10px",borderRadius:6,fontSize:10,border:"1px solid "+C.bd,background:C.sa,color:C.tm,cursor:"pointer"}}>Ninguna</button>
-                </div>
-                <div style={{fontSize:11,color:C.td,marginBottom:8}}>{selCount} sede{selCount!==1?"s":""} seleccionada{selCount!==1?"s":""}</div>
-                <div style={{maxHeight:220,overflowY:"auto",border:"1px solid "+C.bd,borderRadius:10,background:C.sf}}>
-                  {sedesFilt.map(function(s) {
-                    var on = selSedes && selSedes[s.sede];
-                    return (
-                      <div key={s.sede} onClick={function(){toggleSede(s.sede);}} style={{padding:"10px 14px",cursor:"pointer",borderBottom:"1px solid "+C.bd,display:"flex",justifyContent:"space-between",alignItems:"center",background:on?C.pg:"transparent",transition:"background 0.1s"}}>
-                        <div style={{display:"flex",alignItems:"center",gap:10}}>
-                          <div style={{width:18,height:18,borderRadius:5,border:"2px solid "+(on?C.p:C.bd),background:on?C.p:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                            {on && <span style={{color:"#fff",fontSize:11,fontWeight:700}}>✓</span>}
-                          </div>
-                          <span style={{fontSize:12,fontWeight:on?600:400,color:on?C.p:C.t}}>{s.sede}</span>
-                        </div>
-                        <span style={{fontSize:10,color:C.td}}>{s.marcCount.toLocaleString()} reg</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {!progress && (
-          <div style={{padding:"14px 24px",borderTop:"1px solid "+C.bd,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
-            <button onClick={onClose} style={{padding:"8px 16px",borderRadius:8,fontSize:11,border:"1px solid "+C.bd,background:"transparent",color:C.tm,cursor:"pointer"}}>Cancelar</button>
-            <button onClick={function(){
-              if (mode==="consolidado") exportConsolidado();
-              else if (mode==="todas") exportTodas();
-              else exportSeleccionadas();
-            }} disabled={mode==="seleccionar"&&selCount===0}
-              style={{padding:"10px 24px",borderRadius:8,fontSize:13,fontWeight:700,
-                background:mode==="seleccionar"&&selCount===0?"#ccc":"linear-gradient(135deg,#1f6b2e,#3a9a50)",
-                border:"none",color:"#fff",cursor:mode==="seleccionar"&&selCount===0?"not-allowed":"pointer",
-                boxShadow:mode==="seleccionar"&&selCount===0?"none":"0 2px 8px rgba(31,107,46,0.3)"}}>
-              {mode==="consolidado" ? "⬇ Descargar consolidado" : mode==="todas" ? "⬇ Exportar "+allSedes.length+" archivos" : "⬇ Exportar "+selCount+" sede"+(selCount!==1?"s":"")}
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function YearSelectorModal({ facturas, onConfirm, onCancel }) {
-  // Detectar meses presentes
-  const mesesDetectados = useMemo(() => {
-    const s = {};
-    facturas.forEach(f => { if (f.mes) s[String(f.mes).toLowerCase().trim()] = 1; });
-    return Object.keys(s);
-  }, [facturas]);
-  // Sugerir cruzando años si hay diciembre+enero
-  const tieneDic = mesesDetectados.indexOf("diciembre") >= 0;
-  const tieneEneFeb = mesesDetectados.indexOf("enero") >= 0 || mesesDetectados.indexOf("febrero") >= 0;
-  const sugerirCruzando = tieneDic && tieneEneFeb;
-  const anioActual = new Date().getFullYear();
-  const [anio, setAnio] = useState(sugerirCruzando ? anioActual - 1 : anioActual);
-  const [cruzando, setCruzando] = useState(sugerirCruzando);
-
-  return (
-    <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-      <div style={{background:C.sf,borderRadius:16,padding:28,maxWidth:520,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,0.3)"}}>
-        <h3 style={{margin:"0 0 8px",fontSize:20,fontWeight:800,color:C.w}}>¿De qué año son las facturas?</h3>
-        <p style={{margin:"0 0 18px",color:C.tm,fontSize:13,lineHeight:1.5}}>
-          Necesito el año para calcular día de la semana, quincena y semana ISO en cada factura. Esto hace que los filtros (Día Semana, Quincena, Semana) afecten también la curva de ventas.
-        </p>
-        <div style={{padding:10,borderRadius:8,background:C.sa,border:"1px solid "+C.bd,marginBottom:14,fontSize:11,color:C.tm}}>
-          <strong>Meses detectados:</strong> {mesesDetectados.join(", ")} ({mesesDetectados.length} mes{mesesDetectados.length>1?"es":""})
-        </div>
-
-        <div style={{marginBottom:14}}>
-          <label style={{display:"flex",alignItems:"center",gap:10,padding:12,borderRadius:10,background:!cruzando?C.pg:"transparent",border:"1px solid "+(!cruzando?C.p:C.bd),cursor:"pointer",marginBottom:8}}>
-            <input type="radio" name="cruzando" checked={!cruzando} onChange={()=>setCruzando(false)} />
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600,color:C.w,fontSize:13}}>Todas las facturas son del mismo año</div>
-              <div style={{fontSize:11,color:C.td}}>Los meses (ej. ene-feb-mar) pertenecen todos a {anio}</div>
-            </div>
-          </label>
-          <label style={{display:"flex",alignItems:"center",gap:10,padding:12,borderRadius:10,background:cruzando?C.pg:"transparent",border:"1px solid "+(cruzando?C.p:C.bd),cursor:"pointer"}}>
-            <input type="radio" name="cruzando" checked={cruzando} onChange={()=>setCruzando(true)} />
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600,color:C.w,fontSize:13}}>Cruzan años (ej. dic 2025 → feb 2026)</div>
-              <div style={{fontSize:11,color:C.td}}>Oct/Nov/Dic son año inicial; Ene/Feb/Mar son año siguiente</div>
-            </div>
-          </label>
-        </div>
-
-        <div style={{marginBottom:18}}>
-          <label style={{display:"block",fontSize:11,fontWeight:600,color:C.tm,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>
-            {cruzando ? "Año de inicio" : "Año"}
-          </label>
-          <select value={anio} onChange={(e)=>setAnio(Number(e.target.value))} style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid "+C.bd,fontSize:14,fontWeight:600,color:C.w,background:C.sa}}>
-            {[anioActual-3, anioActual-2, anioActual-1, anioActual, anioActual+1].map(y => (
-              <option key={y} value={y}>{y}{cruzando?" → "+(y+1):""}</option>
-            ))}
-          </select>
-        </div>
-
-        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-          <button onClick={onCancel} style={{padding:"10px 18px",borderRadius:8,fontSize:13,fontWeight:600,background:"transparent",border:"1px solid "+C.bd,color:C.tm,cursor:"pointer"}}>Cancelar</button>
-          <button onClick={()=>onConfirm(anio, cruzando)} style={{padding:"10px 22px",borderRadius:8,fontSize:13,fontWeight:700,background:"linear-gradient(135deg,#1C5A2A,#7dd105)",border:"none",color:"#fff",cursor:"pointer"}}>Aplicar año</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MasterFilterModal({ data, masterFilter, setMasterFilter, filteredData, onClose }) {
-  var allSedes = {}, allMeses = {};
-  data.marc.forEach(function(m) {
-    if (m.DEPENDENCIA) allSedes[m.DEPENDENCIA] = (allSedes[m.DEPENDENCIA]||0) + 1;
-    if (m.MES) allMeses[m.MES] = 1;
-  });
-  data.fact.forEach(function(f) {
-    if (f.sede) allSedes[f.sede] = (allSedes[f.sede]||0) + 1;
-    if (f.mes) allMeses[f.mes] = 1;
-  });
-  var sedesList = Object.keys(allSedes).sort();
-  var ORD_MES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-  var mesesList = Object.keys(allMeses).sort(function(a,b){ return ORD_MES.indexOf(a.toLowerCase().trim()) - ORD_MES.indexOf(b.toLowerCase().trim()); });
-
-  var sedesSel = masterFilter.sedes || {};
-  var sedesActivas = Object.keys(sedesSel).filter(function(k){ return sedesSel[k]; });
-  var sedesCnt = sedesActivas.length;
-  var _busq = useState(""), busqSede = _busq[0], setBusqSede = _busq[1];
-  var sedesFiltradas = busqSede.trim() ? sedesList.filter(function(s){ return s.toLowerCase().indexOf(busqSede.trim().toLowerCase()) >= 0; }) : sedesList;
-
-  function toggleSede(sede) {
-    setMasterFilter(function(prev) {
-      var cur = Object.assign({}, prev.sedes || {});
-      if (cur[sede]) delete cur[sede]; else cur[sede] = true;
-      var keys = Object.keys(cur).filter(function(k){ return cur[k]; });
-      return Object.assign({}, prev, {sedes: keys.length > 0 ? cur : null});
-    });
-  }
-  function seleccionarTodasSedes() {
-    setMasterFilter(function(prev){ return Object.assign({}, prev, {sedes: null}); });
-  }
-  function seleccionarSoloVisibles() {
-    setMasterFilter(function(prev){
-      var obj = {}; sedesFiltradas.forEach(function(s){ obj[s] = true; });
-      return Object.assign({}, prev, {sedes: obj});
-    });
-  }
-
-  function toggleMes(mes) {
-    setMasterFilter(function(prev) {
-      var cur = prev.meses;
-      if (!cur) {
-        var obj = {}; mesesList.forEach(function(m){ obj[m] = true; }); obj[mes] = false;
-        var anyOn = Object.values(obj).some(function(v){ return v; });
-        return Object.assign({}, prev, {meses: anyOn ? obj : null});
-      }
-      var next = Object.assign({}, cur); next[mes] = !next[mes];
-      var anyOn = Object.values(next).some(function(v){ return v; });
-      var allOn = Object.values(next).every(function(v){ return v; });
-      return Object.assign({}, prev, {meses: allOn ? null : (anyOn ? next : null)});
-    });
-  }
-
-  var allMesesOn = !masterFilter.meses;
-  var curMeses = masterFilter.meses || {};
-  var totalRaw = data.marc.length + data.fact.length;
-  var totalFiltered = filteredData.marc.length + filteredData.fact.length;
-
-  return (
-    <div style={{position:"fixed",inset:0,zIndex:9998,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onClose}>
-      <div style={{background:C.sf,borderRadius:20,width:520,maxWidth:"95vw",maxHeight:"85vh",display:"flex",flexDirection:"column",boxShadow:"0 24px 60px rgba(0,0,0,0.3)",border:"1px solid "+C.bd,overflow:"hidden"}} onClick={function(e){e.stopPropagation();}}>
-
-        <div style={{background:"linear-gradient(135deg,#0f1f13,#1f6b2e)",padding:"18px 24px",flexShrink:0}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div>
-              <div style={{color:"#e8f5eb",fontSize:16,fontWeight:800}}>Filtro Maestro</div>
-              <div style={{color:"#7aab85",fontSize:11,marginTop:3}}>Filtra datos por una o varias sedes antes de exportar</div>
-            </div>
-            <button onClick={onClose} style={{width:32,height:32,borderRadius:8,background:"rgba(255,255,255,0.1)",border:"none",color:"#e8f5eb",fontSize:16,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
-          </div>
-        </div>
-
-        <div style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
-
-          <div style={{marginBottom:20}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-              <span style={{fontSize:13,fontWeight:700,color:C.t}}>Sedes {sedesCnt > 0 && <span style={{fontSize:11,fontWeight:600,color:C.p,marginLeft:6}}>({sedesCnt} seleccionadas)</span>}</span>
-              <div style={{display:"flex",gap:6}}>
-                {busqSede.trim() && <button onClick={seleccionarSoloVisibles} style={{padding:"3px 10px",borderRadius:6,fontSize:10,border:"1px solid "+C.bd,background:"transparent",color:C.tm,cursor:"pointer"}}>Solo visibles</button>}
-                <button onClick={seleccionarTodasSedes} style={{padding:"3px 10px",borderRadius:6,fontSize:10,border:"1px solid "+C.bd,background:sedesCnt===0?C.pg:"transparent",color:sedesCnt===0?C.p:C.tm,cursor:"pointer",fontWeight:600}}>Todas</button>
-              </div>
-            </div>
-            <input value={busqSede} onChange={function(e){setBusqSede(e.target.value);}} placeholder="Buscar sede..." style={{width:"100%",boxSizing:"border-box",padding:"9px 12px",borderRadius:8,fontSize:12,background:C.sa,border:"1px solid "+C.bd,color:C.t,outline:"none",marginBottom:10}} />
-            <div style={{maxHeight:220,overflowY:"auto",border:"1px solid "+C.bd,borderRadius:10,background:C.sf}}>
-              {sedesFiltradas.length === 0 && <div style={{padding:"14px",fontSize:12,color:C.td,textAlign:"center"}}>Sin resultados para "{busqSede}"</div>}
-              {sedesFiltradas.map(function(sede) {
-                var activa = !!sedesSel[sede];
-                var cnt = allSedes[sede] || 0;
-                return (
-                  <div key={sede} onClick={function(){toggleSede(sede);}} style={{padding:"10px 14px",cursor:"pointer",borderBottom:"1px solid "+C.bd,background:activa?C.pg:"transparent",display:"flex",justifyContent:"space-between",alignItems:"center",transition:"background 0.1s"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:10,flex:1,minWidth:0}}>
-                      <div style={{width:16,height:16,borderRadius:4,border:"2px solid "+(activa?C.p:C.bd),background:activa?C.p:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                        {activa && <span style={{color:"#fff",fontSize:10,fontWeight:900,lineHeight:1}}>✓</span>}
-                      </div>
-                      <span style={{fontSize:12,fontWeight:activa?700:400,color:activa?C.p:C.t,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sede}</span>
-                    </div>
-                    <span style={{fontSize:10,color:C.td,flexShrink:0,marginLeft:8}}>{cnt.toLocaleString()} reg</span>
-                  </div>
-                );
-              })}
-            </div>
-            {sedesCnt === 0 && <div style={{marginTop:8,fontSize:11,color:C.td,fontStyle:"italic"}}>Sin selección = todas las sedes</div>}
-          </div>
-
-          {mesesList.length > 1 && (
-            <div style={{marginBottom:16}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <span style={{fontSize:13,fontWeight:700,color:C.t}}>Meses</span>
-                <button onClick={function(){setMasterFilter(function(p){return Object.assign({},p,{meses:null});});}} style={{padding:"3px 10px",borderRadius:6,fontSize:10,border:"1px solid "+C.bd,background:allMesesOn?C.pg:"transparent",color:allMesesOn?C.p:C.tm,cursor:"pointer",fontWeight:600}}>Todos</button>
-              </div>
-              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                {mesesList.map(function(mes) {
-                  var on = allMesesOn || curMeses[mes] === true;
-                  return <button key={mes} onClick={function(){toggleMes(mes);}} style={{padding:"8px 16px",borderRadius:10,fontSize:12,fontWeight:on?700:400,background:on?C.pg:"transparent",border:"2px solid "+(on?C.p:C.bd),color:on?C.p:C.td,cursor:"pointer",transition:"all 0.15s",minWidth:80,textTransform:"capitalize"}}>{mes}</button>;
-                })}
-              </div>
-            </div>
-          )}
-
-          {sedesCnt > 0 && (
-            <div style={{padding:14,borderRadius:12,background:"rgba(31,107,46,0.06)",border:"1px solid rgba(31,107,46,0.15)",marginTop:8}}>
-              <div style={{fontSize:11,color:C.p,fontWeight:600,marginBottom:4}}>
-                Datos filtrados para: {sedesCnt === 1 ? sedesActivas[0] : sedesCnt + " sedes"}
-              </div>
-              <div style={{fontSize:12,color:C.tm}}>{filteredData.marc.length.toLocaleString()} marcaciones · {filteredData.fact.length.toLocaleString()} facturas</div>
-              {sedesCnt > 1 && <div style={{fontSize:10,color:C.td,marginTop:4,lineHeight:1.4}}>Sedes incluidas: {sedesActivas.join(", ")}</div>}
-              <div style={{fontSize:10,color:C.td,marginTop:4}}>Al exportar la memoria digital, solo incluirá estos datos</div>
-            </div>
-          )}
-        </div>
-
-        <div style={{padding:"14px 24px",borderTop:"1px solid "+C.bd,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
-          <button onClick={function(){setMasterFilter({sedes:null,meses:null,clases:null,secciones:null});}} style={{padding:"8px 16px",borderRadius:8,fontSize:11,border:"1px solid "+C.bd,background:"transparent",color:C.tm,cursor:"pointer"}}>Limpiar filtros</button>
-          <button onClick={onClose} style={{padding:"10px 24px",borderRadius:8,fontSize:13,fontWeight:700,background:"linear-gradient(135deg,#1f6b2e,#3a9a50)",border:"none",color:"#fff",cursor:"pointer",boxShadow:"0 2px 8px rgba(31,107,46,0.3)"}}>Aplicar</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function App() {
-  var _u = useState(null), user = _u[0], setUser = _u[1];
-  var _v = useState("upload"), view = _v[0], setView = _v[1];
-  var _d = useState({marc:[],fact:[]}), data = _d[0], setData = _d[1];
-  var _sb = useState(true), sidebar = _sb[0], setSB = _sb[1];
-  var _em = useState(false), expM = _em[0], setExpM = _em[1];
-  var _exModal = useState(false), exportModalOpen = _exModal[0], setExportModalOpen = _exModal[1];
-  var _lu = useState("admin"), lu = _lu[0], setLU = _lu[1];
-  var _lp = useState(""), lp = _lp[0], setLP = _lp[1];
-  var _le = useState(""), le = _le[0], setLE = _le[1];
-  var _la = useState(0), loginAttempts = _la[0], setLoginAttempts = _la[1];
-  var _lb = useState(0), loginBlockedUntil = _lb[0], setLoginBlockedUntil = _lb[1];
-  var _sp = useState(false), showP = _sp[0], setSP = _sp[1];
-  var _fs = useState(""), fSt = _fs[0], setFS = _fs[1];
-  var _pr = useState(false), proc = _pr[0], setProc = _pr[1];
-  var _cr = useState(false), confirmReset = _cr[0], setConfirmReset = _cr[1];
-  var _mf = useState({sedes:null,meses:null,clases:null,secciones:null}), masterFilter = _mf[0], setMasterFilter = _mf[1];
-  var _mfOpen = useState(false), masterFilterOpen = _mfOpen[0], setMasterFilterOpen = _mfOpen[1];
-  // Modal para preguntar año de las facturas
-  var _yrOpen = useState(false), yearModalOpen = _yrOpen[0], setYearModalOpen = _yrOpen[1];
-  var _yrPending = useState([]), facturasPendingEnrich = _yrPending[0], setFacturasPendingEnrich = _yrPending[1];
-  var _params = useState(Object.assign({}, PARAMS_DEFAULT)), parametrosGlobal = _params[0], setParametrosGlobal = _params[1];
-  var fRef = useRef(null);
-  var sessionTimer = useRef(null);
-  var SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutos
-
-  useEffect(function() {
-    var lastReset = 0;
-    function resetTimer() {
-      var now = Date.now();
-      if (now - lastReset < 60000) return; // throttle: max 1 reset per minute
-      lastReset = now;
-      if (sessionTimer.current) clearTimeout(sessionTimer.current);
-      if (user) {
-        sessionTimer.current = setTimeout(function() {
-          setUser(null);
-          setData({marc:[],fact:[]});
-          setView("upload");
-          setFS("");
-          setMasterFilter({sedes:null,meses:null,clases:null,secciones:null});
-        }, SESSION_TIMEOUT);
-      }
-    }
-    var events = ["click","keydown","touchstart"];
-    events.forEach(function(ev){ window.addEventListener(ev, resetTimer); });
-    resetTimer();
-    return function() {
-      events.forEach(function(ev){ window.removeEventListener(ev, resetTimer); });
-      if (sessionTimer.current) clearTimeout(sessionTimer.current);
-    };
-  }, [user]);
-
-  /* Actualizar tema global en cada render */
-
-  /* Mantener BREAK_PAIRS al serializar para evitar reconstrucción frágil con regex.
-     El peso extra es mínimo (~50 bytes por empleado/día) y garantiza datos intactos. */
-  var limpiarMarc = function(marc) {
-    return marc.map(function(m) {
-      var c = {};
-      for (var k in m) { c[k] = m[k]; }
-      return c;
-    });
-  };
-
-  var login = async function() {
-    try {
-      var now = Date.now();
-      if (loginBlockedUntil > now) {
-        var segsRestantes = Math.ceil((loginBlockedUntil - now) / 1000);
-        setLE("Demasiados intentos. Espera " + segsRestantes + " segundos.");
-        return;
-      }
-      var u = USERS[lu.toLowerCase()];
-      if (!u) {
-        var newAttempts = loginAttempts + 1;
-        setLoginAttempts(newAttempts);
-        if (newAttempts >= 5) { setLoginBlockedUntil(now + 30000); setLE("5 intentos fallidos. Bloqueado por 30 segundos."); setLoginAttempts(0); }
-        else setLE("Credenciales incorrectas (" + newAttempts + "/5)");
-        return;
-      }
-      var h = await hashPw(lp);
-      if (h === u.pw) { setUser({role:u.role,name:u.name}); setLE(""); setLoginAttempts(0); }
-      else {
-        var newAttempts = loginAttempts + 1;
-        setLoginAttempts(newAttempts);
-        if (newAttempts >= 5) { setLoginBlockedUntil(now + 30000); setLE("5 intentos fallidos. Bloqueado por 30 segundos."); setLoginAttempts(0); }
-        else setLE("Credenciales incorrectas (" + newAttempts + "/5)");
-      }
-    } catch(e) { setLE("Error de autenticación: " + e.message); }
-  };
-
-  var doUpload = function(e) {
-    var files = Array.from(e.target.files);
-    if (!files.length) return;
-    setProc(true);
-    setFS("Procesando...");
-    var result = {marc:[],fact:[]};
-
-    var processFiles = async function() {
-      try {
-        for (var fi = 0; fi < files.length; fi++) {
-          var file = files[fi];
-          var nm = file.name.toUpperCase();
-          setFS("Leyendo " + file.name + "...");
-
-          /* === CSV / TSV nativo — mucho mas rapido que SheetJS === */
-          if (nm.endsWith(".CSV") || nm.endsWith(".TSV") || nm.endsWith(".TXT")) {
-            setFS("Leyendo CSV: " + file.name + " (" + (file.size / 1048576).toFixed(1) + " MB)...");
-            var csvText = await file.text();
-            var firstLine = csvText.slice(0, csvText.indexOf("\n"));
-            var sep = firstLine.split(";").length > firstLine.split(",").length ? ";" : (firstLine.indexOf("\t") >= 0 ? "\t" : ",");
-            var csvLines = csvText.split(/\r?\n/);
-            csvText = null;
-            var csvRows = [];
-            for (var cli = 0; cli < csvLines.length; cli++) {
-              if (csvLines[cli].trim() === "") continue;
-              csvRows.push(csvLines[cli].split(sep).map(function(c) { return c.trim(); }));
-            }
-            csvLines = null;
-            setFS(csvRows.length - 1 + " filas leidas de " + file.name + ". Procesando...");
-            var csvH = (csvRows[0] || []).map(function(h) { return String(h).toUpperCase(); });
-            var esMarc = csvH.some(function(h) { return h.indexOf("IDENTIFICACION") >= 0 || h === "CODEMPLEADO"; }) && csvH.some(function(h) { return h === "HORA" || h === "FUNCION"; });
-            var esFact = csvH.some(function(h) { return h.indexOf("FACT") >= 0; }) && csvH.some(function(h) { return h.indexOf("VENTA") >= 0 || h.indexOf("CLASE") >= 0; });
-            if (esMarc) {
-              result.marc = procBase(csvRows);
-              setFS(result.marc.length + " marcaciones procesadas de " + file.name);
-            } else if (esFact) {
-              result.fact = procFact(csvRows);
-              setFS(result.fact.length + " facturas procesadas de " + file.name);
-            } else {
-              result.marc = procBase(csvRows);
-              if (result.marc.length > 0) {
-                setFS(result.marc.length + " marcaciones procesadas de " + file.name);
-              } else {
-                setFS("No se pudo identificar el tipo de CSV: " + file.name);
-              }
-            }
-            continue;
-          }
-
-          if (file.name.endsWith(".json") || file.name.endsWith(".scmem")) {
-            // === Aviso de tamaño grande ===
-            var sizeMB = file.size / 1048576;
-            if (sizeMB > 100) {
-              var continuar = window.confirm(
-                "ARCHIVO GRANDE DETECTADO\n\n" +
-                "El archivo \"" + file.name + "\" pesa " + sizeMB.toFixed(0) + " MB.\n\n" +
-                "En computadores con poca RAM (8GB o menos) puede fallar al procesarlo.\n\n" +
-                "Recomendaciones:\n" +
-                "- Cierra otras pestañas del navegador\n" +
-                "- Usa Chrome o Edge (no Firefox para archivos grandes)\n" +
-                "- Si falla, vuelve a generar el .scmem con FILTRO MAESTRO aplicado (por sede o mes) para reducir tamaño\n\n" +
-                "¿Continuar de todas formas?"
-              );
-              if (!continuar) {
-                setFS("Carga cancelada por el usuario (" + sizeMB.toFixed(0) + " MB)");
-                continue;
-              }
-            }
-
-            setFS("Leyendo " + file.name + " (" + sizeMB.toFixed(1) + " MB)...");
-            var text;
-            try {
-              text = await file.text();
-            } catch (errLectura) {
-              setFS("Error al leer archivo: " + (errLectura.message || "memoria insuficiente. Cierra pestañas y vuelve a intentar."));
-              continue;
-            }
-
-            setFS("Parseando JSON (" + (text.length / 1048576).toFixed(0) + " MB)...");
-            var json;
-            try {
-              json = JSON.parse(text);
-            } catch (errParse) {
-              // Error de parsing - dar mensaje util
-              var msg = errParse.message || "JSON invalido";
-              var posMatch = msg.match(/position (\d+)/);
-              var lineMatch = msg.match(/line (\d+)/);
-              var detalle = "";
-              if (posMatch && lineMatch) {
-                var pos = parseInt(posMatch[1]);
-                var lin = parseInt(lineMatch[1]);
-                var pctLeido = ((pos / text.length) * 100).toFixed(1);
-                detalle = "\n\nEl archivo se corto en la posicion " + pos.toLocaleString() + " (linea " + lin.toLocaleString() + "), " + pctLeido + "% del total. ";
-                if (pctLeido > 50 && pctLeido < 99) {
-                  detalle += "Esto suele pasar por falta de RAM en este computador. ";
-                  detalle += "Soluciones:\n- Cierra otras pestanas y reintenta\n- Usa un computador con mas RAM\n- Genera un .scmem mas pequeño filtrando por sede o mes";
-                }
-              }
-              setFS("Error al procesar JSON: " + msg + detalle);
-              text = null; // liberar memoria
-              continue;
-            }
-            text = null; // liberar el string grande despues de parsearlo
-
-            if (json._type === "seguimiento_memory" || json._type === "staffpulse_memory") {
-              setFS("Normalizando " + (json.marcaciones ? json.marcaciones.length.toLocaleString() : 0) + " marcaciones...");
-              // Normalizar sedes y reconstruir BREAK_PAIRS al cargar desde memoria
-              var reconstructWarnings = 0;
-              var marcNorm = (json.marcaciones||[]).map(function(m){ var c=Object.assign({},m); if(c.DEPENDENCIA) c.DEPENDENCIA=normSede(c.DEPENDENCIA);
-                if (!c.BREAK_PAIRS && c.BREAK_DETALLE) {
-                  c.BREAK_PAIRS = c.BREAK_DETALLE.split(" | ").map(function(seg) {
-                    var match = seg.match(/(\d+):(\d+)-(\d+):(\d+)\s*\((\d+)min\s*(.*?)\)/);
-                    if (!match) { reconstructWarnings++; return null; }
-                    var sH = parseInt(match[1]) + parseInt(match[2])/60;
-                    var lH = parseInt(match[3]) + parseInt(match[4])/60;
-                    var dur = parseInt(match[5]);
-                    var tipoStr = match[6].trim();
-                    var tipo = tipoStr === "Corto" ? "BREAK_CORTO" : tipoStr === "TP Legal" ? "TP_LEGAL" : tipoStr === "Incompleto" ? "BREAK_INCOMPLETO" : "TP_ILEGAL";
-                    return { salidaH:sH, llegadaH:lH, duracionMin:dur, tipo:tipo };
-                  }).filter(Boolean);
-                }
-                if (!c.BREAK_PAIRS) c.BREAK_PAIRS = [];
-                return c; });
-              if (reconstructWarnings > 0) {
-                console.warn("BREAK_PAIRS reconstruction: " + reconstructWarnings + " segments failed to parse");
-                setFS("⚠️ Memoria cargada con advertencias: " + reconstructWarnings + " breaks no se pudieron reconstruir. Los cálculos de políticas pueden estar incompletos. Recomendamos cargar el Excel original.");
-              }
-              var factNorm = (json.facturas||[]).map(function(f){ var c=Object.assign({},f); if(c.sede) c.sede=normSede(c.sede); return c; });
-              // Verificar si las facturas ya tienen campos enriquecidos (dsem, quincena, semana)
-              var necesitaEnriquecer = factNorm.length > 0 && (!factNorm[0].dsem || !factNorm[0].quincena);
-              if (necesitaEnriquecer) {
-                // Cargar marcaciones de inmediato, las facturas van por modal de año
-                setData({marc:marcNorm, fact:[]});
-                setFacturasPendingEnrich(factNorm);
-                setYearModalOpen(true);
-                setFS("Memoria cargada: " + marcNorm.length.toLocaleString() + " marcaciones. Indica el año para procesar " + factNorm.length.toLocaleString() + " facturas...");
-              } else {
-                setData({marc:marcNorm,fact:factNorm});
-                if (reconstructWarnings === 0) {
-                  setFS("Memoria cargada: " + marcNorm.length.toLocaleString() + " marcaciones · " + factNorm.length.toLocaleString() + " facturas");
-                }
-              }
-              setProc(false);
-              return;
-            }
-            continue;
-          }
-
-          var sizeMBxls = file.size / 1048576;
-          if (sizeMBxls > 100) {
-            var continuarXls = window.confirm(
-              "ARCHIVO EXCEL GRANDE\n\n" +
-              "\"" + file.name + "\" pesa " + sizeMBxls.toFixed(0) + " MB.\n\n" +
-              "En computadores con poca RAM (8GB o menos) puede fallar al parsear.\n\n" +
-              "Si el computador no aguanta:\n" +
-              "- Cierra otras pestanas del navegador\n" +
-              "- Divide el archivo por sede o mes\n\n" +
-              "¿Continuar?"
-            );
-            if (!continuarXls) {
-              setFS("Carga cancelada (" + sizeMBxls.toFixed(0) + " MB)");
-              continue;
-            }
-          }
-          var buf = await file.arrayBuffer();
-          setFS("Parseando Excel: " + file.name + " (" + sizeMBxls.toFixed(1) + " MB)...");
-          // NO usar cellDates - las horas vienen como fracciones (0 a 1) que son mas faciles de parsear
-          var wb = XLSX.read(buf, {type:"array"});
-
-          if (nm.indexOf("BASE_DE_DATOS") >= 0 || nm.indexOf("BASE DE DATOS") >= 0) {
-            var sheet = wb.Sheets[wb.SheetNames[0]];
-            var rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:null, raw:true});
-            result.marc = procBase(rows);
-            setFS(result.marc.length + " marcaciones procesadas de " + file.name);
-          }
-          else if (nm.indexOf("MARCACION") >= 0 && nm.indexOf("POLITICA") < 0) {
-            var sn = wb.SheetNames[0];
-            for (var si = 0; si < wb.SheetNames.length; si++) {
-              if (wb.SheetNames[si].toUpperCase().indexOf("MARCACION") >= 0) { sn = wb.SheetNames[si]; break; }
-            }
-            var rows2 = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, defval:null, raw:true});
-            if (rows2.length > 1) {
-              var headers2 = [];
-              for (var hi2 = 0; hi2 < (rows2[0]||[]).length; hi2++) headers2.push(String(rows2[0][hi2]||"").trim());
-              var hasGrid = headers2.some(function(h){return h.indexOf(":00") >= 0;});
-              if (hasGrid) {
-                var processed = [];
-                for (var ri = 1; ri < rows2.length; ri++) {
-                  var rw = {};
-                  for (var ci2 = 0; ci2 < headers2.length; ci2++) rw[headers2[ci2]] = rows2[ri] ? rows2[ri][ci2] : null;
-                  var mp = {
-                    IDENTIFICACION:rw["IDENTIFICACION"], EMPLEADO:rw["EMPLEADO"], DEPENDENCIA:normSede(rw["DEPENDENCIA"]),
-                    CARGO:rw["CARGO"], CENTROCOSTO:rw["CENTROCOSTO"], FECHA:rw["FECHA"],
-                    TIPO_JORNADA:rw["TIPO DE JORNADA"],
-                    TOTAL_HORAS:typeof rw["total horas"]==="number"?rw["total horas"]:0,
-                    TOTAL_BREAK:0, TURNO_PARTIDO:0, ENTRADA_H:"-", SALIDA_H:"-",
-                    MES:rw["Mes"]||rw["MES"], DIA:rw["Dia"]||rw["Día"]||rw["DIA"],
-                    DIA_SEMANA:rw["Dia semana"]||rw["Día semana"]||rw["DIA_SEMANA"],
-                    SEMANA:rw["Semana"]||rw["SEMANA"]
-                  };
-                  var mpDia = Number(mp.DIA);
-                  var mpMes = String(mp.MES||"").toLowerCase();
-                  mp.QUINCENA = (mpDia===1||mpDia===2||mpDia===3||mpDia===15||mpDia===16||mpDia===17||mpDia===30||mpDia===31||(mpMes==="febrero"&&mpDia===28)) ? "Si" : "No";
-                  for (var hci = 0; hci < HC.length; hci++) mp[HC[hci]] = typeof rw[HC[hci]] === "number" ? rw[HC[hci]] : 0;
-                  processed.push(mp);
-                }
-                result.marc = processed;
-                setFS(processed.length + " marcaciones de " + file.name);
-              }
-            }
-          }
-          else if (nm.indexOf("GRAFICA") >= 0 || nm.indexOf("FACTURA") >= 0) {
-            var sn3 = wb.SheetNames[0];
-            for (var sj = 0; sj < wb.SheetNames.length; sj++) {
-              var snUp = wb.SheetNames[sj].toUpperCase();
-              if (snUp === "EXPO" || snUp === "FACTURAS" || snUp.indexOf("FACTURA") >= 0) { sn3 = wb.SheetNames[sj]; break; }
-            }
-            var rows3 = XLSX.utils.sheet_to_json(wb.Sheets[sn3], {header:1, defval:null});
-            result.fact = procFact(rows3);
-            setFS(result.fact.length + " facturas de " + file.name);
-          }
-          else {
-            /* Auto-detectar por nombre de hoja o por headers */
-            var autoSn = null;
-            var autoTipo = null;
-            
-            /* Primero buscar por nombre de hoja */
-            for (var sAuto = 0; sAuto < wb.SheetNames.length; sAuto++) {
-              var snA = wb.SheetNames[sAuto].toUpperCase();
-              if (snA === "FACTURAS" || snA === "EXPO" || snA.indexOf("FACTURA") >= 0) { autoSn = wb.SheetNames[sAuto]; autoTipo = "fact"; break; }
-              if (snA.indexOf("MARCACION") >= 0 || snA.indexOf("BASE") >= 0) { autoSn = wb.SheetNames[sAuto]; autoTipo = "marc"; break; }
-            }
-            
-            var targetSheet = autoSn ? wb.Sheets[autoSn] : wb.Sheets[wb.SheetNames[0]];
-            var autoRows = XLSX.utils.sheet_to_json(targetSheet, {header:1, defval:null, raw:true});
-            
-            if (autoRows.length > 1) {
-              /* Si no se detecto por nombre de hoja, detectar por headers */
-              if (!autoTipo) {
-                var h0 = (autoRows[0] || []).map(function(h) { return String(h || "").toUpperCase(); });
-                if (h0.some(function(h) { return h.indexOf("FACT") >= 0; }) && h0.some(function(h) { return h.indexOf("VENTA") >= 0 || h.indexOf("CLASE") >= 0; })) {
-                  autoTipo = "fact";
-                } else if (h0.some(function(h) { return h.indexOf("IDENTIFICACION") >= 0 || h.indexOf("EMPLEADO") >= 0; }) && h0.some(function(h) { return h.indexOf("HORA") >= 0 || h.indexOf("FUNCION") >= 0; })) {
-                  autoTipo = "marc";
-                }
-              }
-              
-              if (autoTipo === "fact") {
-                result.fact = procFact(autoRows);
-                setFS(result.fact.length + " facturas detectadas de " + file.name);
-              } else if (autoTipo === "marc") {
-                result.marc = procBase(autoRows);
-                setFS(result.marc.length + " marcaciones detectadas de " + file.name);
-              } else {
-                setFS("No se pudo identificar el tipo de archivo: " + file.name);
-              }
-            }
-          }
-        }
-        // Si llegaron facturas NUEVAS, abrir modal de año primero
-        if (result.fact.length > 0) {
-          setFacturasPendingEnrich(result.fact);
-          setYearModalOpen(true);
-          // Guardar marcaciones de inmediato pero las facturas esperan el año
-          if (result.marc.length > 0) {
-            setData(function(prev) {
-              return { marc: result.marc, fact: prev.fact };
-            });
-          }
-        } else {
-          setData(function(prev) {
-            return {
-              marc: result.marc.length > 0 ? result.marc : prev.marc,
-              fact: prev.fact
-            };
-          });
-          setMasterFilter({sedes:null,meses:null,clases:null,secciones:null});
-          setMasterFilterOpen(true);
-        }
-      } catch (err) {
-        setFS("Error al procesar: " + err.message);
-        console.error("Upload error:", err);
-      }
-      setProc(false);
-    };
-    processFiles();
-  };
-
-  var descargarArchivo = function(contenido, nombreArchivo, tipo) {
-    try {
-      var blob = new Blob([contenido], {type: tipo});
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement("a");
-      a.href = url;
-      a.download = nombreArchivo;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch(e) { alert("Error al descargar: " + e.message); }
-  };
-
-  var expMem = function() {
-    var activas = masterFilter.sedes ? Object.keys(masterFilter.sedes).filter(function(k){return masterFilter.sedes[k];}) : [];
-    var sedeName = activas.length === 1 ? activas[0] : (activas.length > 1 ? activas.length + "sedes" : "");
-    var jsonStr = JSON.stringify({_type:"seguimiento_memory",_v:2,marcaciones:filteredData.marc,facturas:filteredData.fact});
-    var fecha = new Date().toISOString().slice(0,10);
-    var nombre = "seguimiento_memoria_" + (sedeName ? sedeName.replace(/\s+/g,"_") + "_" : "") + fecha + ".json";
-    descargarArchivo(jsonStr, nombre, "application/json");
-  };
-
-  var expXls = function() {
-    var marcClean = limpiarMarc(filteredData.marc);
-    var keys = Object.keys(marcClean[0] || {});
-    var lines = [keys.join("	")];
-    marcClean.forEach(function(r) { lines.push(keys.map(function(k) { return r[k] != null ? String(r[k]) : ""; }).join("	")); });
-    var fecha = new Date().toISOString().slice(0,10);
-    var sedeName2 = masterFilter.sedes ? Object.keys(masterFilter.sedes).find(function(k){return masterFilter.sedes[k];}) || "" : "";
-    descargarArchivo(lines.join("\n"), "seguimiento_datos_" + (sedeName2 ? sedeName2.replace(/\s+/g,"_") + "_" : "") + fecha + ".txt", "text/plain");
-  };
-
-  /* Filtro maestro: filtra datos ANTES de pasarlos a cualquier vista */
-  var filteredData = useMemo(function() {
-    var mf = masterFilter;
-    var fm = data.marc;
-    var ff = data.fact;
-    if (mf.sedes) fm = fm.filter(function(m){ return mf.sedes[m.DEPENDENCIA]; });
-    if (mf.meses) fm = fm.filter(function(m){ return mf.meses[m.MES]; });
-    if (mf.secciones) fm = fm.filter(function(m){ return mf.secciones[m.CENTROCOSTO]; });
-    if (mf.sedes) ff = ff.filter(function(f){ return mf.sedes[f.sede]; });
-    if (mf.meses) ff = ff.filter(function(f){ return mf.meses[f.mes]; });
-    if (mf.clases) ff = ff.filter(function(f){ return mf.clases[f.clase]; });
-    if (mf.areas) ff = ff.filter(function(f){ return mf.areas[f.seccion]; }); // Area de productos (desc_cri_mayor_item_2)
-    return { marc: fm, fact: ff };
-  }, [data, masterFilter]);
-
-  /* === LOGIN === */
-  if (!user) {
-    return (
-      <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#04140a,#081c0e)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans','Plus Jakarta Sans',system-ui,sans-serif",
-        backgroundImage:"radial-gradient(ellipse at 30% 40%, rgba(31,107,46,0.2) 0%, transparent 55%), radial-gradient(ellipse at 75% 70%, rgba(74,222,128,0.07) 0%, transparent 50%)"}}>
-        <div style={{width:400,padding:44,borderRadius:28,background:"rgba(8,22,12,0.98)",border:"1px solid rgba(74,222,128,0.13)",boxShadow:"0 40px 100px rgba(0,0,0,0.7),0 0 0 1px rgba(74,222,128,0.05)",backdropFilter:"blur(24px)"}}>
-          <div style={{textAlign:"center",marginBottom:36}}>
-            <div style={{width:68,height:68,borderRadius:20,margin:"0 auto 18px",background:"linear-gradient(135deg,#1a5228,#2d8a41)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,color:"#4ade80",fontWeight:900,boxShadow:"0 8px 28px rgba(74,222,128,0.28),0 0 0 1px rgba(74,222,128,0.18)",letterSpacing:"-1px"}}>SC</div>
-            <h1 style={{color:"#ecfdf0",fontSize:26,fontWeight:800,margin:"0 0 6px",letterSpacing:"-0.5px"}}>Seguimiento App</h1>
-            <p style={{color:"rgba(122,171,133,0.7)",fontSize:11,margin:0,fontWeight:500,letterSpacing:"1.5px",textTransform:"uppercase"}}>Supertiendas Cañaveral</p>
-          </div>
-          <div style={{marginBottom:14}}>
-            <label style={{color:"rgba(122,171,133,0.8)",fontSize:10,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",display:"block",marginBottom:6}}>Usuario</label>
-            <input value={lu} onChange={function(e){setLU(e.target.value);setLE("");}} onKeyDown={function(e){if(e.key==="Enter")login();}}
-              style={{width:"100%",padding:"13px 16px",borderRadius:12,fontSize:13,fontWeight:500,
-                background:"rgba(255,255,255,0.04)",border:"1px solid rgba(74,222,128,0.14)",
-                color:"#ecfdf0",outline:"none",boxSizing:"border-box",transition:"border-color 0.2s"}} />
-          </div>
-          <div style={{marginBottom:8}}>
-            <label style={{color:"rgba(122,171,133,0.8)",fontSize:10,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",display:"block",marginBottom:6}}>Contraseña</label>
-            <input type={showP?"text":"password"} value={lp} onChange={function(e){setLP(e.target.value);setLE("");}} onKeyDown={function(e){if(e.key==="Enter")login();}}
-              style={{width:"100%",padding:"13px 16px",borderRadius:12,fontSize:13,fontWeight:500,
-                background:"rgba(255,255,255,0.04)",border:"1px solid rgba(74,222,128,0.14)",
-                color:"#ecfdf0",outline:"none",boxSizing:"border-box",transition:"border-color 0.2s"}} />
-            <button onClick={function(){setSP(!showP);}} style={{background:"none",border:"none",color:"rgba(122,171,133,0.6)",fontSize:10,fontWeight:500,cursor:"pointer",marginTop:4,padding:0}}>{showP?"Ocultar clave":"Mostrar clave"}</button>
-          </div>
-          {le && <div style={{padding:"10px 14px",borderRadius:10,marginBottom:14,background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",color:"#fca5a5",fontSize:12,fontWeight:500}}>{le}</div>}
-          <button onClick={login} style={{width:"100%",padding:"14px",borderRadius:14,fontSize:14,fontWeight:700,
-            background:"linear-gradient(135deg,#1f6b2e,#2d8a41)",border:"1px solid rgba(74,222,128,0.2)",
-            color:"#ecfdf0",cursor:"pointer",boxShadow:"0 4px 20px rgba(31,107,46,0.4)",letterSpacing:"0.2px",marginBottom:20}}>Ingresar →</button>
-          <div style={{padding:"10px 14px",borderRadius:12,background:"rgba(255,255,255,0.02)",border:"1px solid rgba(74,222,128,0.07)"}}>
-            <p style={{color:"rgba(107,127,112,0.8)",fontSize:10,margin:0,textAlign:"center",lineHeight:"1.8",fontWeight:500}}>
-              <span style={{color:"rgba(74,222,128,0.6)",fontWeight:700}}>Acceso:</span> Ingrese sus credenciales asignadas
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  /* === MAIN LAYOUT === */
-  var has = filteredData.marc.length > 0 || filteredData.fact.length > 0;
-  var hasMarc = filteredData.marc.length > 0;
-  var hasFact = filteredData.fact.length > 0;
-  var nav = [
-    {id:"upload",label:"Cargar Datos"},
-    {id:"resumen",label:"Resumen"},
-    {id:"dashboard",label:"Dashboard"},
-    {id:"eficiencia",label:"Eficiencia"},
-    {id:"riesgo",label:"Riesgo"},
-    {id:"tendencia",label:"Tendencia"},
-    {id:"policies",label:"Politicas"},
-    {id:"auditoria",label:"Auditoria"},
-    {id:"rules",label:"Manual"}
-  ];
-
-  var content = null;
-  try {
-    if (view === "upload") {
-      content = (
-        <div>
-          <h2 style={{color:C.w,fontSize:16,fontWeight:700,margin:"0 0 12px"}}>Cargar Archivos</h2>
-          <div onClick={function(){if(fRef.current)fRef.current.click();}} style={{padding:48,borderRadius:16,cursor:"pointer",textAlign:"center",border:"2px dashed "+C.bd,background:"linear-gradient(145deg,"+C.sa+",#fff)",transition:"border-color 0.2s, background 0.2s"}}
-            onMouseEnter={function(e){e.currentTarget.style.borderColor=C.p;e.currentTarget.style.background="linear-gradient(145deg,rgba(31,107,46,0.06),#fff)";}}
-            onMouseLeave={function(e){e.currentTarget.style.borderColor=C.bd;e.currentTarget.style.background="linear-gradient(145deg,"+C.sa+",#fff)";}}>
-            <input ref={fRef} type="file" multiple accept=".xlsx,.xlsm,.xls,.json,.csv,.tsv,.txt" style={{display:"none"}} onChange={doUpload} />
-            {proc
-              ? <p style={{color:C.p,margin:0,fontSize:13,fontWeight:600}}>{fSt}</p>
-              : <div>
-                  <div style={{width:48,height:48,borderRadius:12,background:C.pg,border:"1px solid "+C.bd,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px",fontSize:22}}>📂</div>
-                  <p style={{color:C.t,fontSize:15,fontWeight:700,margin:"0 0 6px"}}>Clic para subir archivos</p>
-                  <p style={{color:C.td,fontSize:11,margin:"0 0 3px"}}>BASE_DE_DATOS_MARCACIONES.xlsm · FACTURAS.xlsx · GRAFICA_FINAL.xlsx · Memoria .json</p>
-                  <p style={{color:C.td,fontSize:10,margin:0}}>Detecta automaticamente el tipo de archivo por contenido</p>
-                </div>}
-          </div>
-          {fSt && !proc && <div style={{marginTop:10,padding:10,borderRadius:8,background:C.pg,border:"1px solid "+C.bd}}>
-            <p style={{color:C.p,fontSize:11,margin:0}}>{fSt}</p>
-            <p style={{color:C.tm,fontSize:10,margin:"4px 0 0"}}>
-              {data.marc.length > 0 ? data.marc.length + " marcaciones" : "Sin marcaciones"}
-              {" | "}
-              {data.fact.length > 0 ? data.fact.length + " facturas" : "Sin facturas"}
-              {has ? " - Ve al Dashboard para ver los graficos" : ""}
-            </p>
-          </div>}
-          {/* Diagnóstico de sedes — solo admin */}
-          {user && user.role === "admin" && data.marc.length > 0 && (() => {
-            // Recoger valores originales únicos de DEPENDENCIA antes de la normalización
-            // (ya están normalizados en data.marc, así que mostramos los normalizados agrupados)
-            const sedesNorm = {};
-            data.marc.forEach(function(m) {
-              var n = m.DEPENDENCIA || "(vacío)";
-              sedesNorm[n] = (sedesNorm[n] || 0) + 1;
-            });
-            const lista = Object.entries(sedesNorm).sort((a,b) => b[1]-a[1]);
-            return (
-              <div style={{marginTop:14,borderRadius:12,border:"1px solid "+C.bd,overflow:"hidden"}}>
-                <div style={{padding:"12px 16px",background:"linear-gradient(135deg,#0f1f13,#1f6b2e)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <span style={{color:"#e8f5eb",fontSize:12,fontWeight:700}}>🏪 Sedes detectadas tras normalización ({lista.length})</span>
-                  <span style={{color:"#7aab85",fontSize:10}}>Los nombres ya están unificados (SC ZARZAL = ZARZAL)</span>
-                </div>
-                <div style={{padding:"12px 16px",background:C.sf,display:"flex",flexWrap:"wrap",gap:8}}>
-                  {lista.map(function([sede, cnt]) {
-                    return (
-                      <div key={sede} style={{padding:"6px 12px",borderRadius:8,background:C.sa,border:"1px solid "+C.bd,display:"flex",gap:8,alignItems:"center"}}>
-                        <span style={{fontSize:12,fontWeight:700,color:C.t}}>{sede}</span>
-                        <span style={{fontSize:10,color:C.td,background:C.pg,padding:"1px 6px",borderRadius:10}}>{cnt}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })()}
-        </div>
-      );
-    } else if (view === "resumen") {
-      content = has
-        ? <ResumenView marc={filteredData.marc} fact={filteredData.fact} parametros={parametrosGlobal} />
-        : <div style={{textAlign:"center",padding:40}}><p style={{color:C.w,fontSize:14}}>Sin datos cargados</p><button onClick={function(){setView("upload");}} style={{padding:"8px 16px",borderRadius:7,background:C.p,border:"none",color:"#fff",cursor:"pointer",marginTop:8,fontSize:12}}>Cargar Archivos</button></div>;
-    } else if (view === "dashboard") {
-      content = has
-        ? <DashView marc={filteredData.marc} fact={filteredData.fact} />
-        : <div style={{textAlign:"center",padding:40}}><p style={{color:C.w,fontSize:14}}>Sin datos cargados</p><button onClick={function(){setView("upload");}} style={{padding:"8px 16px",borderRadius:7,background:C.p,border:"none",color:"#fff",cursor:"pointer",marginTop:8,fontSize:12}}>Cargar Archivos</button></div>;
-    } else if (view === "policies") {
-      content = hasMarc
-        ? <PolView marc={filteredData.marc} parametros={parametrosGlobal} setParametros={setParametrosGlobal} userName={user.name} />
-        : <div style={{textAlign:"center",padding:40}}><p style={{color:C.w}}>Politicas necesita datos de marcaciones</p><button onClick={function(){setView("upload");}} style={{padding:"8px 16px",borderRadius:7,background:C.p,border:"none",color:"#fff",cursor:"pointer",fontSize:12}}>Cargar</button></div>;
-    } else if (view === "auditoria") {
-      content = hasMarc
-        ? <AuditoriaView marc={filteredData.marc} />
-        : <div style={{textAlign:"center",padding:40}}><p style={{color:C.w}}>Auditoria necesita datos de marcaciones</p><button onClick={function(){setView("upload");}} style={{padding:"8px 16px",borderRadius:7,background:C.p,border:"none",color:"#fff",cursor:"pointer",fontSize:12}}>Cargar</button></div>;
-    } else if (view === "eficiencia") {
-      content = (has)
-        ? <EficienciaView marc={filteredData.marc} fact={filteredData.fact} />
-        : <div style={{textAlign:"center",padding:40}}><p style={{color:C.w}}>Necesitas cargar marcaciones y facturas</p><button onClick={function(){setView("upload");}} style={{padding:"8px 16px",borderRadius:7,background:C.p,border:"none",color:"#fff",cursor:"pointer",fontSize:12}}>Cargar</button></div>;
-    } else if (view === "riesgo") {
-      content = hasMarc
-        ? <RiesgoView marc={filteredData.marc} parametros={parametrosGlobal} />
-        : <div style={{textAlign:"center",padding:40}}><p style={{color:C.w}}>Necesitas cargar marcaciones</p><button onClick={function(){setView("upload");}} style={{padding:"8px 16px",borderRadius:7,background:C.p,border:"none",color:"#fff",cursor:"pointer",fontSize:12}}>Cargar</button></div>;
-    } else if (view === "tendencia") {
-      content = hasMarc
-        ? <TendenciaView marc={filteredData.marc} parametros={parametrosGlobal} />
-        : <div style={{textAlign:"center",padding:40}}><p style={{color:C.w}}>Necesitas cargar marcaciones</p><button onClick={function(){setView("upload");}} style={{padding:"8px 16px",borderRadius:7,background:C.p,border:"none",color:"#fff",cursor:"pointer",fontSize:12}}>Cargar</button></div>;
-    } else if (view === "rules") {
-      content = <RulesView />;
-    }
-  } catch (renderErr) {
-    content = <div style={{padding:20,color:C.dg}}>Error renderizando: {String(renderErr.message)}</div>;
-  }
-
-  /* Iconos para el nav */
-  var NAV_ICONS = {upload:"⬆",resumen:"📊",dashboard:"◼",eficiencia:"⚡",riesgo:"⚠",tendencia:"↗",policies:"📋",auditoria:"🔍",rules:"📖"};
-
-  return (
-    <div style={{display:"flex",height:"100vh",overflow:"hidden",background:C.bg,fontFamily:"'DM Sans','Plus Jakarta Sans',system-ui,sans-serif",
-      backgroundImage:"radial-gradient(ellipse at 20% 50%, rgba(31,107,46,0.05) 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, rgba(31,107,46,0.04) 0%, transparent 50%)"}}>
-
-      {/* ══ SIDEBAR ══ */}
-      <div style={{width:sidebar?240:68,transition:"width 0.3s cubic-bezier(0.4,0,0.2,1)",
-        background:"linear-gradient(180deg,"+C.nav+" 0%,#0a1f0e 100%)",borderRight:"1px solid "+C.navBd,
-        display:"flex",flexDirection:"column",flexShrink:0,overflow:"hidden",height:"100vh",
-        boxShadow:"4px 0 32px rgba(0,0,0,0.35)"}}>
-
-        {/* Logo */}
-        <div style={{padding:sidebar?"20px 18px":"16px 0",borderBottom:"1px solid "+C.navBd,
-          display:"flex",alignItems:"center",gap:14,flexShrink:0,justifyContent:sidebar?"flex-start":"center",
-          cursor:"pointer"}} onClick={function(){setSB(!sidebar);}}>
-          <div style={{width:38,height:38,borderRadius:11,flexShrink:0,
-            background:"linear-gradient(135deg,#1a7a2e,#34d399)",
-            display:"flex",alignItems:"center",justifyContent:"center",
-            fontSize:13,fontWeight:800,color:"#fff",letterSpacing:"-0.5px",fontFamily:"'DM Sans',sans-serif",
-            boxShadow:"0 4px 16px rgba(52,211,153,0.3),inset 0 1px 0 rgba(255,255,255,0.15)"}}>SC</div>
-          {sidebar && (
-            <div style={{minWidth:0}}>
-              <div style={{color:C.navT,fontSize:14,fontWeight:800,letterSpacing:"-0.3px",lineHeight:1.1}}>Seguimiento</div>
-              <div style={{color:C.navTm,fontSize:10,fontWeight:500,letterSpacing:"1px",textTransform:"uppercase",marginTop:1}}>Cañaveral</div>
-            </div>
-          )}
-        </div>
-
-        {/* Nav items */}
-        <nav style={{flex:1,padding:"12px 10px",overflowY:"auto",overflowX:"hidden"}}>
-          {nav.map(function(n){
-            var act = view === n.id;
-            return (
-              <button key={n.id} onClick={function(){setView(n.id);}}
-                style={{display:"flex",width:"100%",alignItems:"center",gap:12,
-                  padding:sidebar?"11px 14px":"11px 0",marginBottom:3,
-                  borderRadius:11,border:"none",cursor:"pointer",
-                  justifyContent:sidebar?"flex-start":"center",
-                  background:act?"linear-gradient(135deg,rgba(52,211,153,0.14),rgba(52,211,153,0.06))":"transparent",
-                  color:act?C.navAct:C.navTm,
-                  boxShadow:act?"inset 0 0 0 1px rgba(52,211,153,0.18)":"none",
-                  transition:"all 0.2s ease",fontFamily:"'DM Sans','Plus Jakarta Sans',sans-serif"}}>
-                <span style={{fontSize:15,flexShrink:0,opacity:act?1:0.6,
-                  filter:act?"none":"grayscale(0.4)",transition:"all 0.2s"}}>{NAV_ICONS[n.id]||"·"}</span>
-                {sidebar && <span style={{fontSize:13,fontWeight:act?700:500,letterSpacing:"-0.1px",
-                  whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{n.label}</span>}
-                {act && sidebar && <span style={{marginLeft:"auto",width:7,height:7,borderRadius:"50%",background:C.navAct,flexShrink:0,boxShadow:"0 0 8px rgba(52,211,153,0.5)"}} />}
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* Footer usuario */}
-        <div style={{padding:"10px 8px",borderTop:"1px solid "+C.navBd,flexShrink:0}}>
-          {sidebar ? (
-            <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",
-              borderRadius:10,background:"rgba(255,255,255,0.04)",marginBottom:6}}>
-              <div style={{width:28,height:28,borderRadius:8,background:"linear-gradient(135deg,#1a5228,#2d8a41)",
-                display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,color:"#4ade80",flexShrink:0}}>
-                {user.name.charAt(0)}
-              </div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{color:C.navT,fontSize:11,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{user.name}</div>
-                <div style={{color:C.navTm,fontSize:9,textTransform:"uppercase",letterSpacing:"0.5px",marginTop:1}}>{user.role}</div>
-              </div>
-            </div>
-          ) : (
-            <div style={{display:"flex",justifyContent:"center",marginBottom:6}}>
-              <div style={{width:32,height:32,borderRadius:9,background:"linear-gradient(135deg,#1a5228,#2d8a41)",
-                display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:800,color:"#4ade80"}}>
-                {user.name.charAt(0)}
-              </div>
-            </div>
-          )}
-          <button onClick={function(){setUser(null);setData({marc:[],fact:[]});setView("upload");}}
-            style={{width:"100%",padding:sidebar?"7px 10px":"7px 0",borderRadius:8,border:"none",cursor:"pointer",
-              background:"rgba(239,68,68,0.1)",color:"#fca5a5",
-              fontSize:11,fontWeight:500,transition:"background 0.15s",
-              display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-            <span style={{fontSize:12}}>⏻</span>
-            {sidebar && "Cerrar sesión"}
-          </button>
-        </div>
-      </div>
-
-      {/* ══ ÁREA DERECHA ══ */}
-      <div style={{flex:1,overflowY:"auto",overflowX:"hidden",display:"flex",flexDirection:"column"}}>
-
-        {/* Topbar */}
-        <div style={{padding:"0 28px",height:60,background:"rgba(255,255,255,0.88)",
-          backdropFilter:"blur(16px)",WebkitBackdropFilter:"blur(16px)",borderBottom:"1px solid "+C.bd,
-          display:"flex",justifyContent:"space-between",alignItems:"center",
-          position:"sticky",top:0,zIndex:10,flexShrink:0,
-          boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
-          {/* Breadcrumb */}
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <span style={{fontSize:17,opacity:0.75}}>{NAV_ICONS[view]||"·"}</span>
-            <span style={{color:C.td,fontSize:12,fontWeight:500,fontFamily:"'DM Sans',sans-serif"}}>Cañaveral</span>
-            <span style={{color:C.bd2,fontSize:11}}>›</span>
-            <span style={{color:C.t,fontSize:14,fontWeight:700,letterSpacing:"-0.3px",fontFamily:"'DM Sans',sans-serif"}}>{(nav.find(function(n){return n.id===view;})||{label:""}).label}</span>
-          </div>
-          {/* Acciones */}
-          <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            <HelpButton view={view} />
-            {has && <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 12px",borderRadius:20,
-              background:"rgba(26,122,46,0.06)",border:"1px solid "+C.bd}}>
-              <span style={{width:6,height:6,borderRadius:"50%",background:"#4ade80",flexShrink:0,
-                boxShadow:"0 0 6px rgba(74,222,128,0.6)"}} />
-              <span style={{fontSize:11,color:C.tm,fontWeight:500}}>{filteredData.marc.length.toLocaleString()} registros</span>
-            </div>}
-            {(data.marc.length > 0 || data.fact.length > 0) && <button onClick={function(){setMasterFilterOpen(true);}}
-              style={{padding:"7px 12px",borderRadius:8,fontSize:11,fontWeight:600,
-                background:masterFilter.sedes||masterFilter.meses||masterFilter.clases||masterFilter.secciones?"rgba(31,107,46,0.12)":"transparent",
-                border:"1px solid "+(masterFilter.sedes||masterFilter.meses||masterFilter.clases||masterFilter.secciones?C.p:C.bd),
-                color:masterFilter.sedes||masterFilter.meses||masterFilter.clases||masterFilter.secciones?C.p:C.tm,
-                cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
-              <span style={{fontSize:12}}>⚙</span> Filtro Maestro
-              {(masterFilter.sedes||masterFilter.meses||masterFilter.clases||masterFilter.secciones) && <span style={{width:6,height:6,borderRadius:"50%",background:C.p}} />}
-            </button>}
-            {has && <div style={{display:"flex",gap:6}}>
-              <button onClick={function(){setExportModalOpen(true);}}
-                style={{padding:"7px 14px",borderRadius:8,fontSize:12,fontWeight:600,
-                  background:"linear-gradient(135deg,#1f6b2e,#2d8a41)",border:"none",
-                  color:"#fff",cursor:"pointer",boxShadow:"0 2px 8px rgba(31,107,46,0.3)",
-                  display:"flex",alignItems:"center",gap:6}}>
-                <span style={{fontSize:11}}>💾</span> Exportar Memoria
-              </button>
-              <button onClick={function(){expXls();}}
-                style={{padding:"7px 12px",borderRadius:8,fontSize:11,fontWeight:500,
-                  background:C.sa,border:"1px solid "+C.bd,color:C.tm,cursor:"pointer",
-                  display:"flex",alignItems:"center",gap:5}}>
-                <span style={{fontSize:11}}>📊</span> Excel
-              </button>
-            </div>}
-            {has && <button
-              onClick={function(){setConfirmReset(true);}}
-              style={{padding:"7px 12px",borderRadius:8,fontSize:12,fontWeight:500,
-                background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",
-                color:"#ef4444",cursor:"pointer",transition:"all 0.15s"}}>
-              Reiniciar
-            </button>}
-          </div>
-        </div>
-
-        {/* Contenido */}
-        <div style={{flex:1,padding:"24px 28px"}}>
-          <div style={{background:C.sf,borderRadius:22,padding:30,
-            minHeight:"calc(100vh - 132px)",
-            boxShadow:"0 1px 2px rgba(0,0,0,0.03),0 8px 32px rgba(26,122,46,0.05)",
-            border:"1px solid "+C.bd}}>
-            {content}
-          </div>
-        </div>
-      </div>
-
-
-      {yearModalOpen && (
-        <YearSelectorModal
-          facturas={facturasPendingEnrich}
-          onConfirm={function(anio, cruzandoAnios) {
-            var enriquecidas = enriquecerFacturas(facturasPendingEnrich, anio, cruzandoAnios);
-            setData(function(prev) { return { marc: prev.marc, fact: enriquecidas }; });
-            setFacturasPendingEnrich([]);
-            setYearModalOpen(false);
-            setMasterFilter({sedes:null,meses:null,clases:null,secciones:null});
-            setMasterFilterOpen(true);
-            setFS(enriquecidas.length.toLocaleString() + " facturas procesadas con año " + anio + (cruzandoAnios ? " (cruzando años)" : ""));
-          }}
-          onCancel={function() {
-            setFacturasPendingEnrich([]);
-            setYearModalOpen(false);
-            setFS("Carga de facturas cancelada");
-          }}
-        />
-      )}
-
-      {masterFilterOpen && <MasterFilterModal data={data} masterFilter={masterFilter} setMasterFilter={setMasterFilter} filteredData={filteredData} onClose={function(){setMasterFilterOpen(false);}} />}
-
-      {exportModalOpen && <ExportModal data={data} filteredData={filteredData} masterFilter={masterFilter} limpiarMarc={limpiarMarc} descargarArchivo={descargarArchivo} userName={user.name} onClose={function(){setExportModalOpen(false);}} />}
-
-
-      {confirmReset && (
-        <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center"}} onClick={function(){setConfirmReset(false);}}>
-          <div style={{background:C.sf,borderRadius:16,padding:28,width:360,maxWidth:"90vw",boxShadow:"0 24px 60px rgba(0,0,0,0.3)",border:"1px solid "+C.bd}} onClick={function(e){e.stopPropagation();}}>
-            <div style={{fontSize:15,fontWeight:700,color:C.t,marginBottom:8}}>¿Reiniciar datos?</div>
-            <p style={{fontSize:12,color:C.td,marginBottom:20}}>Se borrarán todas las marcaciones y facturas cargadas. Esta acción no se puede deshacer.</p>
-            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-              <button onClick={function(){setConfirmReset(false);}} style={{padding:"8px 16px",borderRadius:8,fontSize:12,border:"1px solid "+C.bd,background:"transparent",color:C.tm,cursor:"pointer"}}>Cancelar</button>
-              <button onClick={function(){setData({marc:[],fact:[]});setFS("");setView("upload");setConfirmReset(false);}} style={{padding:"8px 16px",borderRadius:8,fontSize:12,fontWeight:700,background:"#ef4444",border:"none",color:"#fff",cursor:"pointer"}}>Sí, reiniciar</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-class ErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
-  static getDerivedStateFromError(error) { return { hasError: true, error: error }; }
-  componentDidCatch(error, info) { console.error("ErrorBoundary:", error, info); this.setState({ componentStack: info && info.componentStack ? info.componentStack : "" }); }
-  render() {
-    if (this.state.hasError) {
-      return React.createElement("div", {style:{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f0f5f1",fontFamily:"'DM Sans','Plus Jakarta Sans',system-ui,sans-serif"}},
-        React.createElement("div", {style:{padding:40,borderRadius:20,background:"#fff",border:"1px solid #daeade",maxWidth:500,textAlign:"center",boxShadow:"0 4px 24px rgba(31,107,46,0.1)"}},
-          React.createElement("div", {style:{fontSize:40,marginBottom:16}}, "⚠️"),
-          React.createElement("h2", {style:{color:"#111a14",fontSize:18,fontWeight:700,margin:"0 0 8px"}}, "Algo salió mal"),
-          React.createElement("p", {style:{color:"#6b7f70",fontSize:13,margin:"0 0 12px"}}, String(this.state.error && this.state.error.message || "Error desconocido")),
-          this.state.componentStack ? React.createElement("pre", {style:{color:"#9ca3af",fontSize:9,margin:"0 0 16px",textAlign:"left",maxHeight:80,overflow:"auto",padding:8,background:"#f3f4f6",borderRadius:8,whiteSpace:"pre-wrap",wordBreak:"break-all"}}, this.state.componentStack) : null,
-          React.createElement("button", {onClick:function(){window.location.reload();},style:{padding:"10px 24px",borderRadius:10,fontSize:13,fontWeight:700,background:"linear-gradient(135deg,#1f6b2e,#2d8a41)",border:"none",color:"#fff",cursor:"pointer"}}, "Recargar App")
-        )
-      );
-    }
-    return this.props.children;
-  }
-}
-
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(React.createElement(ErrorBoundary, null, React.createElement(App)));
+/* ═══ APP ═══ */
+function App(){
+  const[raw,setRaw]=useState(null);const[view,setView]=useState("da");const[sel,setSel]=useState("");const[report,setReport]=useState(null);
+  const[showKPI,setShowKPI]=useState(false);const[kC,setKC]=useState("");const[kE,setKE]=useState("");
+  const[dateFrom,setDateFrom]=useState("");const[dateTo,setDateTo]=useState("");
+  const[sedeFilter,setSedeFilter]=useState("");
+  const[showRetirados,setShowRetirados]=useState(true);
+  const[ccostoFilter,setCcostoFilter]=useState("");
+
+  const sedes=useMemo(()=>{if(!raw)return[];const s=[...new Set(raw.cajeros.map(c=>c.sede).filter(Boolean))].sort();return s;},[raw]);
+  const hasBD=raw?raw.cajeros.some(c=>c.activo!==null):false;
+  const ccostos=useMemo(()=>{if(!raw||!hasBD)return[];return[...new Set(raw.cajeros.map(c=>c.ccosto).filter(Boolean))].sort();},[raw,hasBD]);
+  const sedeData=useMemo(()=>{if(!raw)return null;
+    let cajeros=raw.cajeros;
+    if(hasBD&&!showRetirados)cajeros=cajeros.filter(c=>c.activo!==false);
+    if(ccostoFilter)cajeros=cajeros.filter(c=>c.ccosto===ccostoFilter);
+    if(sedeFilter&&sedes.length>1){cajeros=cajeros.filter(c=>c.sede===sedeFilter);}
+    if(cajeros.length===0)return{...raw,cajeros:[],avg:0,avgR:0,tR:0,tF:0,dS:[],allDates:[],hasBD};
+    if(cajeros===raw.cajeros&&!sedeFilter)return{...raw,hasBD};
+    const avg=cajeros.reduce((s,c)=>s+c.pfH,0)/cajeros.length;const avgR=cajeros.reduce((s,c)=>s+c.prH,0)/cajeros.length;
+    rankCajeros(cajeros,avg,raw.kpiCfg);
+    const allDates=[...new Set(cajeros.flatMap(c=>c.dias.map(d=>d.fecha)))].sort();
+    const dS=allDates.map(dk=>{let f=0,r=0,h=0,a=0;cajeros.forEach(c=>{const d=c.dias.find(x=>x.fecha===dk);if(d){f+=d.facs;r+=d.regs;h+=d.hrs;a++;}});return{fecha:dk,fechaD:fD(new Date(dk+"T12:00:00")),facs:f,regs:r,hrs:h,activos:a,fH:h>0?f/h:0};});
+    const sede=sedeFilter||raw.sede;
+    return{...raw,cajeros,avg,avgR,sede,tR:cajeros.reduce((s,c)=>s+c.tR,0),tF:cajeros.reduce((s,c)=>s+c.tF,0),periodo:{desde:allDates[0]||raw.periodo.desde,hasta:allDates[allDates.length-1]||raw.periodo.hasta},dS,allDates,hasSched:cajeros.some(c=>c.hrsHor!==null),hasBD};
+  },[raw,sedeFilter,sedes,showRetirados,hasBD,ccostoFilter]);
+  const data=useMemo(()=>sedeData?filterByDates(sedeData,dateFrom,dateTo):null,[sedeData,dateFrom,dateTo]);
+
+  const applyKPI=()=>{const c=parseFloat(kC),e=parseFloat(kE);if(!isNaN(c)&&!isNaN(e)&&c>e){setRaw(recalcKPIs(raw,{active:true,cumple:c,enProm:e}));setShowKPI(false);}};
+  const clearKPI=()=>{setKC("");setKE("");setRaw(recalcKPIs(raw,null));setShowKPI(false);};
+
+  if(!data)return <Upload onData={setRaw}/>;
+
+  if(report){return <div style={{fontFamily:"'Segoe UI',system-ui,sans-serif",background:"#fff",minHeight:"100vh"}}>
+    <style>{`@media print{.np{display:none!important}.pa{padding:0!important}}`}</style>
+    <div className="np" style={{position:"sticky",top:0,zIndex:100,background:`linear-gradient(135deg,${CL.priDk},${CL.pri})`,padding:"10px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+      <button onClick={()=>setReport(null)} style={{padding:"8px 16px",borderRadius:10,border:"1px solid rgba(255,255,255,.3)",background:"rgba(255,255,255,.15)",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>← Volver</button>
+      <div style={{color:"#fff",fontSize:15,fontWeight:700}}>{report.title}</div>
+      <button onClick={()=>dlReport(report.html,report.title)} style={{padding:"10px 24px",borderRadius:10,border:"none",background:"#fff",color:CL.pri,fontSize:14,fontWeight:700,cursor:"pointer",boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}>📥 Descargar</button></div>
+    <div className="pa" style={{maxWidth:820,margin:"0 auto",padding:"20px"}} dangerouslySetInnerHTML={{__html:`<style>${PCSS}</style>${report.html}`}}/></div>;}
+
+  const hC=data.kpiCfg&&data.kpiCfg.active;
+  const vs=[{id:"da",l:"📊"},{id:"in",l:"👤"},{id:"cm",l:"⚔️"},{id:"al",l:"🚨"},{id:"mt",l:"🎯"},{id:"si",l:"🧮"},{id:"sc",l:"🏅"},{id:"rp",l:"📄"},{id:"pc",l:"📈"}];
+  const vLabels={da:"Dashboard",in:"Individual",cm:"Comparar",al:"Alertas",mt:"Metas",si:"Simulador",sc:"Scorecard",rp:"Informes",pc:"Periodos"};
+  const inpSt={padding:"10px 12px",borderRadius:10,border:"2px solid #ddd",fontSize:16,fontWeight:700,width:120,textAlign:"center",outline:"none"};
+
+  return <div style={{fontFamily:"'Segoe UI',system-ui,sans-serif",background:CL.bg,minHeight:"100vh",color:CL.txt}}>
+    <style>{`@media(max-width:768px){.nav-lbl{display:none}.desk-grid{grid-template-columns:1fr!important}.aud-content *{max-width:100%!important;overflow-x:auto}.aud-content div[style]{min-width:0!important}}`}</style>
+    {showKPI&&<div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.5)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setShowKPI(false)}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:20,padding:"28px 32px",maxWidth:460,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,.25)"}}>
+        <h2 style={{fontSize:18,fontWeight:800,marginBottom:4}}>⚙️ Configurar KPIs</h2>
+        <p style={{fontSize:13,color:CL.txtL,marginBottom:16}}>Define umbrales de Fact/Hora. Sin definir = calculo automatico.</p>
+        {hC&&<div style={{background:CL.priLt,padding:"10px 14px",borderRadius:10,marginBottom:14,fontSize:13}}>✅ <b>Activos:</b> Cumple ≥ {data.kpiCfg.cumple} | En prom ≥ {data.kpiCfg.enProm}</div>}
+        {!hC&&<div style={{background:"#f8f9fa",padding:"10px 14px",borderRadius:10,marginBottom:14,fontSize:13}}>📊 <b>Auto:</b> Cumple ≥ {fN(data.avg+KPI_CUMPLE_OFFSET)} | En prom ≥ {fN(data.avg)}</div>}
+        <div style={{display:"flex",gap:20,marginBottom:20,flexWrap:"wrap"}}>
+          <div style={{flex:1,minWidth:140}}><label style={{display:"block",fontSize:12,fontWeight:700,color:CL.txtL,marginBottom:6}}>✅ Cumple (F/H ≥)</label><input style={{...inpSt,borderColor:"#2ecc71"}} type="number" step="0.1" placeholder={fN(data.avg+KPI_CUMPLE_OFFSET)} value={kC} onChange={e=>setKC(e.target.value)}/></div>
+          <div style={{flex:1,minWidth:140}}><label style={{display:"block",fontSize:12,fontWeight:700,color:CL.txtL,marginBottom:6}}>😐 En prom (F/H ≥)</label><input style={{...inpSt,borderColor:"#f39c12"}} type="number" step="0.1" placeholder={fN(data.avg)} value={kE} onChange={e=>setKE(e.target.value)}/></div></div>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end",flexWrap:"wrap"}}>
+          {hC&&<button onClick={clearKPI} style={{padding:"10px 20px",borderRadius:10,border:`2px solid ${CL.dan}`,background:"#fff",color:CL.dan,fontSize:13,fontWeight:700,cursor:"pointer"}}>🗑️ Quitar</button>}
+          <button onClick={()=>setShowKPI(false)} style={{padding:"10px 20px",borderRadius:10,border:"2px solid #ddd",background:"#fff",color:CL.txtL,fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancelar</button>
+          <button onClick={applyKPI} disabled={!kC||!kE||parseFloat(kC)<=parseFloat(kE)} style={{padding:"10px 24px",borderRadius:10,border:"none",background:(!kC||!kE||parseFloat(kC)<=parseFloat(kE))?"#ccc":CL.pri,color:"#fff",fontSize:13,fontWeight:700,cursor:(!kC||!kE||parseFloat(kC)<=parseFloat(kE))?"not-allowed":"pointer"}}>✅ Aplicar</button></div></div></div>}
+
+    <nav style={{background:`linear-gradient(135deg,${CL.priDk},${CL.pri})`,position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 16px rgba(0,0,0,.15)"}}>
+      <div style={{maxWidth:1280,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 18px",flexWrap:"wrap",gap:6}}>
+        <div style={{color:"#fff",display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:20}}>📊</span><div><div style={{fontSize:16,fontWeight:700}}>Auditoria Cajeros</div><div style={{fontSize:10,opacity:.75}}>{data.sede}{sedes.length>1&&!sedeFilter?` (${sedes.length} sedes)`:""}{hC?" | KPIs":""}</div></div></div>
+        <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>{vs.map(v=><button key={v.id} onClick={()=>setView(v.id)} title={vLabels[v.id]} style={{background:view===v.id?"rgba(255,255,255,.22)":"transparent",color:"#fff",border:`1px solid ${view===v.id?"rgba(255,255,255,.4)":"transparent"}`,padding:"6px 10px",borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:view===v.id?600:400}}>{v.l}<span className="nav-lbl" style={{marginLeft:3}}>{vLabels[v.id]}</span></button>)}
+          <button onClick={()=>{setShowKPI(true);if(hC){setKC(String(data.kpiCfg.cumple));setKE(String(data.kpiCfg.enProm));}}} style={{background:hC?"rgba(255,200,0,.3)":"transparent",color:"#fff",border:`1px solid ${hC?"rgba(255,200,0,.5)":"transparent"}`,padding:"6px 10px",borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:hC?700:400}}>⚙️</button>
+          <button onClick={()=>saveSnapshot(raw)} title="Guardar memoria" style={{background:"transparent",color:"#fff",border:"1px solid transparent",padding:"6px 10px",borderRadius:7,cursor:"pointer",fontSize:11}}>💾</button></div>
+        <button onClick={()=>{if(window.confirm("¿Seguro? Se perdera el analisis actual.\nGuarda la memoria (💾) si quieres conservarlo.")){setRaw(null);setView("da");setDateFrom("");setDateTo("");setSedeFilter("");setCcostoFilter("");}}} style={{padding:"4px 10px",borderRadius:7,border:"1px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.12)",color:"#fff",fontSize:11,cursor:"pointer"}}>🔄</button></div></nav>
+    <div className="aud-content" style={{maxWidth:1280,margin:"0 auto",padding:"16px"}}>
+      <FilterBar data={raw} from={dateFrom} to={dateTo} setFrom={setDateFrom} setTo={setDateTo} sedes={sedes} sedeFilter={sedeFilter} setSedeFilter={setSedeFilter} hasBD={hasBD} showRetirados={showRetirados} setShowRetirados={setShowRetirados} ccostos={ccostos} ccostoFilter={ccostoFilter} setCcostoFilter={setCcostoFilter}/>
+      <div style={{marginTop:14}}><ErrBound>
+        {view==="da"&&<Dash data={data} showR={setReport}/>}
+        {view==="in"&&<Indiv data={data} sel={sel} setSel={setSel} showR={setReport}/>}
+        {view==="cm"&&<Cmp data={data}/>}
+        {view==="al"&&<Alt data={data}/>}
+        {view==="mt"&&<Metas data={data}/>}
+        {view==="si"&&<Sim data={data}/>}
+        {view==="sc"&&<Score data={data} showR={setReport}/>}
+        {view==="rp"&&<Rpt data={data} showR={setReport}/>}
+        {view==="pc"&&<PComp data={data}/>}
+      </ErrBound></div></div></div>;}
+
+// Mount app
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(App));

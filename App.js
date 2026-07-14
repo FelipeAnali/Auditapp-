@@ -1329,7 +1329,9 @@ function Upload({
         setEr("Archivo no valido.");
         return;
       }
-      setSt(`✅ Memoria: ${d.sede} | ${d.cajeros.length} cajeros`);
+      const c1 = d.cajeros[0];
+      toast(d.cajeros.length + "caj | tpv:" + (d.tpvStats || []).length + " | hA:" + (c1 && c1.hA ? c1.hA.length : 0) + " | dias:" + (c1 ? c1.dias.length : 0) + " | dS:" + d.dS.length, 6000);
+      setSt("Memoria: " + d.sede + " | " + d.cajeros.length + " cajeros");
       setTimeout(() => onData(d), 600);
     } catch (e) {
       setEr("Error: " + e.message);
@@ -1966,12 +1968,12 @@ function Dash({
     }
   }, "📊 KPI"), /*#__PURE__*/React.createElement(ResponsiveContainer, {
     width: "100%",
-    height: 130
+    height: 180
   }, /*#__PURE__*/React.createElement(PieChart, null, /*#__PURE__*/React.createElement(Pie, {
     data: pp,
     cx: "50%",
     cy: "50%",
-    outerRadius: 50,
+    outerRadius: 55,
     dataKey: "value",
     label: e => `${e.name}:${e.value}`
   }, pp.map((e, i) => /*#__PURE__*/React.createElement(Cell, {
@@ -2215,7 +2217,7 @@ function Dash({
   }, h)))), /*#__PURE__*/React.createElement("tbody", null, data.cajeros.map((c, idx) => {
     const mf = c.tF > 0 ? (c.hrsEfec * 60 / c.tF).toFixed(1) : "—";
     const rc = rColor(c.rank, data.cajeros.length);
-    const bg = c.kpi.lab === "Cumple" ? "#f0faf4" : c.kpi.lab === "No cumple" ? "#fef5f5" : idx % 2 === 0 ? "#fff" : "#f8faf8";
+    const bg = c.kpi.lab === "Cumple" ? "#f0faf4" : c.kpi.lab === "No cumple" ? "#fef5f5" : "#fffcf0";
     return /*#__PURE__*/React.createElement("tr", {
       key: c.nombre,
       style: {
@@ -3982,7 +3984,7 @@ function PComp({
     }
   }, "Sube un archivo ", /*#__PURE__*/React.createElement("b", null, ".json"), " (guardado con 💾) o un ", /*#__PURE__*/React.createElement("b", null, ".xlsx"), " de otro periodo u otra sede. La app detecta automaticamente si es la misma sede o una diferente.")), /*#__PURE__*/React.createElement(Btn, {
     green: true,
-    onClick: () => saveSnapshot(data)
+    onClick: () => saveSnapshot(raw)
   }, "💾 Guardar Memoria")), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
@@ -4810,7 +4812,7 @@ function Score({
       fontSize: 11,
       color: CL.txtL
     }
-  }, "✅ Cumplen: ", /*#__PURE__*/React.createElement("b", null, cu.length), " (", data.cajeros.length > 0 ? (cu.length / data.cajeros.length * 100).toFixed(0) : 0, "%) | ❌ No cumplen: ", /*#__PURE__*/React.createElement("b", null, nc.length), " (", data.cajeros.length > 0 ? (nc.length / data.cajeros.length * 100).toFixed(0) : 0, "%)")), /*#__PURE__*/React.createElement("div", {
+  }, "✅ Cumplen: ", /*#__PURE__*/React.createElement("b", null, cu.length), " (", data.cajeros.length > 0 ? (cu.length / data.cajeros.length * 100).toFixed(0) : 0, "%) | 😐 En promedio: ", /*#__PURE__*/React.createElement("b", null, ep.length), " (", data.cajeros.length > 0 ? (ep.length / data.cajeros.length * 100).toFixed(0) : 0, "%) | ❌ No cumplen: ", /*#__PURE__*/React.createElement("b", null, nc.length), " (", data.cajeros.length > 0 ? (nc.length / data.cajeros.length * 100).toFixed(0) : 0, "%)")), /*#__PURE__*/React.createElement("div", {
     style: crd
   }, /*#__PURE__*/React.createElement("h3", {
     style: {
@@ -5898,6 +5900,6 @@ function App() {
   })))));
 }
 
-// Mount app
+// Mount
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(React.createElement(App));
