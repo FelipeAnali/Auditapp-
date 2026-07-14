@@ -379,21 +379,23 @@ function Upload({onData}){const r1=useRef(),r2=useRef(),r3=useRef(),r4=useRef();
       {er&&<div style={{marginTop:10,padding:"8px 14px",background:"rgba(231,76,60,.2)",borderRadius:12,color:"#fff",fontSize:13}}>⚠️ {er}</div>}</div></div>);}
 
 /* ═══ FILTER BAR ═══ */
-function FilterBar({data,from,to,setFrom,setTo,sedes,sedeFilter,setSedeFilter,hasBD,showRetirados,setShowRetirados,ccostos,ccostoFilter,setCcostoFilter}){const mn=data.allDates?.[0]||"",mx=data.allDates?.[data.allDates.length-1]||"";const active=from||to;const invalid=from&&to&&from>to;
-  return <div style={{...crd,padding:"10px 16px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",background:invalid?"#fde8e8":active||sedeFilter||!showRetirados||ccostoFilter?"#fff9e6":"#f8faf8"}}>
-    {sedes.length>1&&<><span style={{fontSize:14}}>🏢</span><select value={sedeFilter} onChange={e=>setSedeFilter(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"2px solid #9b59b6",fontSize:12,fontWeight:600,maxWidth:200}}>
-      <option value="">Todas las sedes ({sedes.length})</option>{sedes.map(s=><option key={s} value={s}>{s}</option>)}</select></>}
-    {ccostos.length>1&&<><span style={{fontSize:14}}>🏷️</span><select value={ccostoFilter} onChange={e=>setCcostoFilter(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"2px solid #e67e22",fontSize:12,fontWeight:600,maxWidth:220}}>
-      <option value="">Todas las secciones ({ccostos.length})</option>{ccostos.map(s=><option key={s} value={s}>{s}</option>)}</select></>}
-    {hasBD&&<label style={{display:"flex",alignItems:"center",gap:4,fontSize:12,fontWeight:600,color:showRetirados?"#e74c3c":"#2ecc71",cursor:"pointer"}}>
-      <input type="checkbox" checked={!showRetirados} onChange={e=>setShowRetirados(!e.target.checked)}/>{showRetirados?"👥 Con retirados":"✅ Solo activos"}</label>}
+function FilterBar(props){const {data, from, to, setFrom, setTo, sedes, sedeFilter, setSedeFilter, hasBD, showRetirados, setShowRetirados, ccostos, ccostoFilter, setCcostoFilter} = props;
+return <div style={{...crd,padding:"10px 16px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",background:invalid?"#fde8e8":"#f8faf8"}}>
+    {sedes.length>1&&<><span style={{fontSize:14}}>🏢</span><select multiple value={sedeFilter} onChange={e=>{const v=Array.from(e.target.selectedOptions,o=>o.value);setSedeFilter(v.filter(x=>x!==""));}} style={{minHeight:"65px",borderRadius:8}}><option value="">Todas las sedes ({sedes.length})</option>{sedes.map(s=><option key={s} value={s}>{s}</option>)}</select></>}
+    
+    {ccostos.length>1&&<><span style={{fontSize:14}}>🏷️</span><select multiple value={ccostoFilter} onChange={e=>{const v=Array.from(e.target.selectedOptions,o=>o.value);setCcostoFilter(v.filter(x=>x!==""));}} style={{minHeight:"65px",borderRadius:8}}><option value="">Todas las secciones ({ccostos.length})</option>{ccostos.map(s=><option key={s} value={s}>{s}</option>)}</select></>}
+    
+    {hasBD&&<label style={{display:"flex",alignItems:"center",gap:4,fontSize:12,fontWeight:600,color:showRetirados?"#e74c3c":"#2ecc71"}}><input type="checkbox" checked={!showRetirados} onChange={e=>setShowRetirados(!e.target.checked)}/>{showRetirados?"👥 Con retirados":"✅ Solo activos"}</label>}
+    
     <span style={{fontSize:14}}>📅</span><span style={{fontSize:12,fontWeight:700,color:CL.txtL}}>Fechas:</span>
-    <input type="date" value={from} min={mn} max={to||mx} onChange={e=>setFrom(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:`1px solid ${invalid?"#e74c3c":"#ddd"}`,fontSize:12}}/>
+    <input type="date" value={from} min={mn} max={to||mx} onChange={e=>setFrom(e.target.value)} style={{padding:"6px 10px",borderRadius:8}}/>
     <span style={{fontSize:12,color:CL.txtL}}>a</span>
-    <input type="date" value={to} min={from||mn} max={mx} onChange={e=>setTo(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:`1px solid ${invalid?"#e74c3c":"#ddd"}`,fontSize:12}}/>
-    {(active||sedeFilter||ccostoFilter)&&<button onClick={()=>{setFrom("");setTo("");setSedeFilter("");setCcostoFilter("");}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid #e74c3c",background:"#fff",color:"#e74c3c",fontSize:11,cursor:"pointer",fontWeight:600}}>✕ Limpiar</button>}
+    <input type="date" value={to} min={from||mn} max={mx} onChange={e=>setTo(e.target.value)} style={{padding:"6px 10px",borderRadius:8}}/>
+    
+    {(active||sedeFilter.length>0||ccostoFilter.length>0)&&<button onClick={()=>{setFrom("");setTo("");setSedeFilter([]);setCcostoFilter([]);}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid #e74c3c",background:"#fff",color:"#e74c3c",cursor:"pointer",fontWeight:600}}>✕ Limpiar</button>}
+    
     {invalid&&<span style={{fontSize:11,color:CL.dan,fontWeight:600}}>❌ Desde no puede ser mayor que Hasta</span>}
-    {(active||sedeFilter||ccostoFilter)&&!invalid&&<span style={{fontSize:11,color:CL.warn,fontWeight:600}}>⚠️ Filtro{sedeFilter?` | ${sedeFilter}`:""}{ccostoFilter?` | ${ccostoFilter}`:""}</span>}
+    {(active||sedeFilter.length>0||ccostoFilter.length>0)&&!invalid&&<span style={{fontSize:11,color:CL.warn,fontWeight:600}}>⚠️ Filtro aplicado</span>}
   </div>;}
 
 /* ═══ DASHBOARD ═══ */
@@ -861,7 +863,7 @@ export default function App(){
   const[raw,setRaw]=useState(null);const[view,setView]=useState("da");const[sel,setSel]=useState("");const[report,setReport]=useState(null);
   const[showKPI,setShowKPI]=useState(false);const[kC,setKC]=useState("");const[kE,setKE]=useState("");
   const[dateFrom,setDateFrom]=useState("");const[dateTo,setDateTo]=useState("");
-  const[sedeFilter,setSedeFilter]=useState("");
+  const[ccostoFilter,setCcostoFilter]=useState([]);
   const[showRetirados,setShowRetirados]=useState(true);
   const[ccostoFilter,setCcostoFilter]=useState("");
 
@@ -870,11 +872,26 @@ export default function App(){
   const ccostos=useMemo(()=>{if(!raw||!hasBD)return[];return[...new Set(raw.cajeros.map(c=>c.ccosto).filter(Boolean))].sort();},[raw,hasBD]);
   const sedeData=useMemo(()=>{if(!raw)return null;
     let cajeros=raw.cajeros;
+
+    // --- NUEVO FILTRO DE CARGOS (EXCLUYE SUPERVISORES) ---
+    cajeros = cajeros.filter(c => {
+      if (!c.cargo) return true; 
+      const cargoDesc = c.cargo.toLowerCase();
+      if (cargoDesc.includes("supervisor")) return false;
+      if (cargoDesc.includes("asesor") || cargoDesc.includes("cajero")) return true;
+      return false;
+    });
+    // -----------------------------------------------------
+
     if(hasBD&&!showRetirados)cajeros=cajeros.filter(c=>c.activo!==false);
-    if(ccostoFilter)cajeros=cajeros.filter(c=>c.ccosto===ccostoFilter);
-    if(sedeFilter&&sedes.length>1){cajeros=cajeros.filter(c=>c.sede===sedeFilter);}
+    
+    // --- FILTROS MÚLTIPLES ---
+    if(ccostoFilter.length>0)cajeros=cajeros.filter(c=>ccostoFilter.includes(c.ccosto));
+    if(sedeFilter.length>0&&sedes.length>1){cajeros=cajeros.filter(c=>sedeFilter.includes(c.sede));}
+    // -------------------------
+
     if(cajeros.length===0)return{...raw,cajeros:[],avg:0,avgR:0,tR:0,tF:0,dS:[],allDates:[],hasBD};
-    if(cajeros===raw.cajeros&&!sedeFilter)return{...raw,hasBD};
+    if(cajeros===raw.cajeros&&sedeFilter.length===0)return{...raw,hasBD};
     const avg=cajeros.reduce((s,c)=>s+c.pfH,0)/cajeros.length;const avgR=cajeros.reduce((s,c)=>s+c.prH,0)/cajeros.length;
     rankCajeros(cajeros,avg,raw.kpiCfg);
     const allDates=[...new Set(cajeros.flatMap(c=>c.dias.map(d=>d.fecha)))].sort();
