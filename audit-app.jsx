@@ -897,7 +897,7 @@ export default function App(){
     const allDates=[...new Set(cajeros.flatMap(c=>c.dias.map(d=>d.fecha)))].sort();
     const dS=allDates.map(dk=>{let f=0,r=0,h=0,a=0;cajeros.forEach(c=>{const d=c.dias.find(x=>x.fecha===dk);if(d){f+=d.facs;r+=d.regs;h+=d.hrs;a++;}});return{fecha:dk,fechaD:fD(new Date(dk+"T12:00:00")),facs:f,regs:r,hrs:h,activos:a,fH:h>0?f/h:0};});
     const sede=sedeFilter||raw.sede;
-    return{...raw,cajeros,avg,avgR,sede,tR:cajeros.reduce((s,c)=>s+c.tR,0),tF:cajeros.reduce((s,c)=>s+c.tF,0),periodo:{desde:allDates[0]||raw.periodo.desde,hasta:allDates[allDates.length-1]||raw.periodo.hasta},dS,allDates,hasSched:cajeros.some(c=>c.hrsHor!==null),hasBD};
+   return {...raw,cajeros,avg,avgR,sede,tR:cajeros.reduce((s,c)=>s+c.tR,0),tF:cajeros.reduce((s,c)=>s+c.tF,0),periodo:{desde:allDates[0]||"",hasta:allDates[allDates.length-1]||""}};
   },[raw,sedeFilter,sedes,showRetirados,hasBD,ccostoFilter]);
   const data=useMemo(()=>sedeData?filterByDates(sedeData,dateFrom,dateTo):null,[sedeData,dateFrom,dateTo]);
 
