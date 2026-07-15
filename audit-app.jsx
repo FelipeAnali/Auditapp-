@@ -693,6 +693,32 @@ function PComp({data}){const r2=useRef();const[d2,setD2]=useState(null);const[st
         {comp.filter(c=>!c.prev).map(c=><span key={c.nombre} style={{display:"inline-block",padding:"3px 10px",margin:2,borderRadius:12,background:"#fff9e6",fontSize:11,fontWeight:600}}>{c.nombre} ({fN(c.pfH)} f/h)</span>)}</div>}
       {d2.cajeros.filter(c2=>!data.cajeros.find(c=>c.nombre===c2.nombre)).length>0&&<div style={{...crd,borderLeft:"4px solid #95a5a6"}}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700,color:"#95a5a6"}}>👋 Salieron (estaban antes, ya no)</h3>
         {d2.cajeros.filter(c2=>!data.cajeros.find(c=>c.nombre===c2.nombre)).map(c2=><span key={c2.nombre} style={{display:"inline-block",padding:"3px 10px",margin:2,borderRadius:12,background:"#f0f0f0",fontSize:11,fontWeight:600}}>{c2.nombre} ({fN(c2.pfH)} f/h)</span>)}</div>}
+
+      {/* KPI Distribution comparison */}
+      <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>📊 KPI: Antes vs Ahora</h3>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+          {[{l:"✅ Cumplen",a:d2.cajeros.filter(c=>c.kpi.lab==="Cumple").length,b:data.cajeros.filter(c=>c.kpi.lab==="Cumple").length,cl:"#2ecc71"},
+            {l:"😐 En promedio",a:d2.cajeros.filter(c=>c.kpi.lab==="En promedio").length,b:data.cajeros.filter(c=>c.kpi.lab==="En promedio").length,cl:"#f39c12"},
+            {l:"❌ No cumplen",a:d2.cajeros.filter(c=>c.kpi.lab==="No cumple").length,b:data.cajeros.filter(c=>c.kpi.lab==="No cumple").length,cl:"#e74c3c"}].map(k=>{const d=k.b-k.a;return <div key={k.l} style={{background:`${k.cl}10`,border:`1px solid ${k.cl}30`,borderRadius:10,padding:"10px 12px",textAlign:"center"}}>
+            <div style={{fontSize:11,fontWeight:700,color:k.cl}}>{k.l}</div>
+            <div style={{fontSize:16,fontWeight:900,color:k.cl}}>{k.a} → {k.b}</div>
+            <div style={{fontSize:13,fontWeight:700,color:d>0?"#2ecc71":d<0?"#e74c3c":"#666"}}>{d>0?"+":""}{d}</div></div>})}</div></div>
+
+      {/* Day of week comparison */}
+      <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>📅 Dias de Semana: Antes vs Ahora</h3>
+        <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["Dia","Fact Ant","Fact Act","ΔFact","Reg Ant","Reg Act","ΔReg"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead><tbody>
+          {(()=>{const mkDow=(ds)=>{const m={};ds.forEach(d=>{const dw=new Date(d.fecha+"T12:00:00").getDay();if(!m[dw])m[dw]={f:0,r:0,n:0};m[dw].f+=d.facs;m[dw].r+=d.regs;m[dw].n++;});return m;};
+            const dA=mkDow(d2.dS),dB=mkDow(data.dS);
+            return[0,1,2,3,4,5,6].filter(d=>dA[d]||dB[d]).map(d=>{const a=dA[d]||{f:0,r:0,n:0},b=dB[d]||{f:0,r:0,n:0};const pfa=a.n?Math.round(a.f/a.n):0,pfb=b.n?Math.round(b.f/b.n):0,pra=a.n?Math.round(a.r/a.n):0,prb=b.n?Math.round(b.r/b.n):0;const df=pfb-pfa,dr=prb-pra;
+              return <tr key={d}><td style={{...TD,fontWeight:600}}>{DIAS[d]}</td><td style={TD}>{pfa}</td><td style={{...TD,fontWeight:600}}>{pfb}</td><td style={{...TD,fontWeight:700,color:df>0?"#2ecc71":df<0?"#e74c3c":"#666"}}>{df>0?"+":""}{df}</td><td style={TD}>{pra}</td><td style={{...TD,fontWeight:600}}>{prb}</td><td style={{...TD,fontWeight:700,color:dr>0?"#2ecc71":dr<0?"#e74c3c":"#666"}}>{dr>0?"+":""}{dr}</td></tr>;});})()}</tbody></table></div></div>
+
+      {/* Hour comparison */}
+      <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>⏰ Horas: Antes vs Ahora</h3>
+        <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["Hora","Reg Ant","Reg Act","Δ","%Cambio"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead><tbody>
+          {(()=>{const mkH=(cajs)=>{const m={};cajs.forEach(c=>(c.hA||[]).forEach(h=>{if(!m[h.hora])m[h.hora]=0;m[h.hora]+=h.regs;}));return m;};
+            const hA=mkH(d2.cajeros),hB=mkH(data.cajeros);const hrs=[...new Set([...Object.keys(hA),...Object.keys(hB)])].sort((a,b)=>+a-+b);
+            return hrs.map(h=>{const a=hA[h]||0,b=hB[h]||0,d=b-a,pct=a>0?((d/a)*100).toFixed(0):b>0?"+∞":"0";
+              return <tr key={h}><td style={{...TD,fontWeight:600}}>{h}:00</td><td style={TD}>{a.toLocaleString()}</td><td style={{...TD,fontWeight:600}}>{b.toLocaleString()}</td><td style={{...TD,fontWeight:700,color:d>0?"#2ecc71":d<0?"#e74c3c":"#666"}}>{d>0?"+":""}{d.toLocaleString()}</td><td style={{...TD,fontSize:11,color:+pct>0?"#2ecc71":+pct<0?"#e74c3c":"#666"}}>{pct}%</td></tr>;});})()}</tbody></table></div></div>
     </>}
 
     {/* SEDE COMPARISON */}

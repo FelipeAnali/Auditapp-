@@ -4521,7 +4521,221 @@ function PComp({
       fontSize: 11,
       fontWeight: 600
     }
-  }, c2.nombre, " (", fN(c2.pfH), " f/h)")))), d2 && mode === "sede" && /*#__PURE__*/React.createElement(SedeComp, {
+  }, c2.nombre, " (", fN(c2.pfH), " f/h)"))), /*#__PURE__*/React.createElement("div", {
+    style: crd
+  }, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      margin: "0 0 10px",
+      fontSize: 14,
+      fontWeight: 700
+    }
+  }, "📊 KPI: Antes vs Ahora"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr 1fr",
+      gap: 10
+    }
+  }, [{
+    l: "✅ Cumplen",
+    a: d2.cajeros.filter(c => c.kpi.lab === "Cumple").length,
+    b: data.cajeros.filter(c => c.kpi.lab === "Cumple").length,
+    cl: "#2ecc71"
+  }, {
+    l: "😐 En promedio",
+    a: d2.cajeros.filter(c => c.kpi.lab === "En promedio").length,
+    b: data.cajeros.filter(c => c.kpi.lab === "En promedio").length,
+    cl: "#f39c12"
+  }, {
+    l: "❌ No cumplen",
+    a: d2.cajeros.filter(c => c.kpi.lab === "No cumple").length,
+    b: data.cajeros.filter(c => c.kpi.lab === "No cumple").length,
+    cl: "#e74c3c"
+  }].map(k => {
+    const d = k.b - k.a;
+    return /*#__PURE__*/React.createElement("div", {
+      key: k.l,
+      style: {
+        background: `${k.cl}10`,
+        border: `1px solid ${k.cl}30`,
+        borderRadius: 10,
+        padding: "10px 12px",
+        textAlign: "center"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: k.cl
+      }
+    }, k.l), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 16,
+        fontWeight: 900,
+        color: k.cl
+      }
+    }, k.a, " → ", k.b), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: d > 0 ? "#2ecc71" : d < 0 ? "#e74c3c" : "#666"
+      }
+    }, d > 0 ? "+" : "", d));
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: crd
+  }, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      margin: "0 0 10px",
+      fontSize: 14,
+      fontWeight: 700
+    }
+  }, "📅 Dias de Semana: Antes vs Ahora"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowX: "auto"
+    }
+  }, /*#__PURE__*/React.createElement("table", {
+    style: {
+      width: "100%",
+      borderCollapse: "collapse"
+    }
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ["Dia", "Fact Ant", "Fact Act", "ΔFact", "Reg Ant", "Reg Act", "ΔReg"].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    style: TH
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, (() => {
+    const mkDow = ds => {
+      const m = {};
+      ds.forEach(d => {
+        const dw = new Date(d.fecha + "T12:00:00").getDay();
+        if (!m[dw]) m[dw] = {
+          f: 0,
+          r: 0,
+          n: 0
+        };
+        m[dw].f += d.facs;
+        m[dw].r += d.regs;
+        m[dw].n++;
+      });
+      return m;
+    };
+    const dA = mkDow(d2.dS),
+      dB = mkDow(data.dS);
+    return [0, 1, 2, 3, 4, 5, 6].filter(d => dA[d] || dB[d]).map(d => {
+      const a = dA[d] || {
+          f: 0,
+          r: 0,
+          n: 0
+        },
+        b = dB[d] || {
+          f: 0,
+          r: 0,
+          n: 0
+        };
+      const pfa = a.n ? Math.round(a.f / a.n) : 0,
+        pfb = b.n ? Math.round(b.f / b.n) : 0,
+        pra = a.n ? Math.round(a.r / a.n) : 0,
+        prb = b.n ? Math.round(b.r / b.n) : 0;
+      const df = pfb - pfa,
+        dr = prb - pra;
+      return /*#__PURE__*/React.createElement("tr", {
+        key: d
+      }, /*#__PURE__*/React.createElement("td", {
+        style: {
+          ...TD,
+          fontWeight: 600
+        }
+      }, DIAS[d]), /*#__PURE__*/React.createElement("td", {
+        style: TD
+      }, pfa), /*#__PURE__*/React.createElement("td", {
+        style: {
+          ...TD,
+          fontWeight: 600
+        }
+      }, pfb), /*#__PURE__*/React.createElement("td", {
+        style: {
+          ...TD,
+          fontWeight: 700,
+          color: df > 0 ? "#2ecc71" : df < 0 ? "#e74c3c" : "#666"
+        }
+      }, df > 0 ? "+" : "", df), /*#__PURE__*/React.createElement("td", {
+        style: TD
+      }, pra), /*#__PURE__*/React.createElement("td", {
+        style: {
+          ...TD,
+          fontWeight: 600
+        }
+      }, prb), /*#__PURE__*/React.createElement("td", {
+        style: {
+          ...TD,
+          fontWeight: 700,
+          color: dr > 0 ? "#2ecc71" : dr < 0 ? "#e74c3c" : "#666"
+        }
+      }, dr > 0 ? "+" : "", dr));
+    });
+  })())))), /*#__PURE__*/React.createElement("div", {
+    style: crd
+  }, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      margin: "0 0 10px",
+      fontSize: 14,
+      fontWeight: 700
+    }
+  }, "⏰ Horas: Antes vs Ahora"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowX: "auto"
+    }
+  }, /*#__PURE__*/React.createElement("table", {
+    style: {
+      width: "100%",
+      borderCollapse: "collapse"
+    }
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ["Hora", "Reg Ant", "Reg Act", "Δ", "%Cambio"].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    style: TH
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, (() => {
+    const mkH = cajs => {
+      const m = {};
+      cajs.forEach(c => (c.hA || []).forEach(h => {
+        if (!m[h.hora]) m[h.hora] = 0;
+        m[h.hora] += h.regs;
+      }));
+      return m;
+    };
+    const hA = mkH(d2.cajeros),
+      hB = mkH(data.cajeros);
+    const hrs = [...new Set([...Object.keys(hA), ...Object.keys(hB)])].sort((a, b) => +a - +b);
+    return hrs.map(h => {
+      const a = hA[h] || 0,
+        b = hB[h] || 0,
+        d = b - a,
+        pct = a > 0 ? (d / a * 100).toFixed(0) : b > 0 ? "+∞" : "0";
+      return /*#__PURE__*/React.createElement("tr", {
+        key: h
+      }, /*#__PURE__*/React.createElement("td", {
+        style: {
+          ...TD,
+          fontWeight: 600
+        }
+      }, h, ":00"), /*#__PURE__*/React.createElement("td", {
+        style: TD
+      }, a.toLocaleString()), /*#__PURE__*/React.createElement("td", {
+        style: {
+          ...TD,
+          fontWeight: 600
+        }
+      }, b.toLocaleString()), /*#__PURE__*/React.createElement("td", {
+        style: {
+          ...TD,
+          fontWeight: 700,
+          color: d > 0 ? "#2ecc71" : d < 0 ? "#e74c3c" : "#666"
+        }
+      }, d > 0 ? "+" : "", d.toLocaleString()), /*#__PURE__*/React.createElement("td", {
+        style: {
+          ...TD,
+          fontSize: 11,
+          color: +pct > 0 ? "#2ecc71" : +pct < 0 ? "#e74c3c" : "#666"
+        }
+      }, pct, "%"));
+    });
+  })()))))), d2 && mode === "sede" && /*#__PURE__*/React.createElement(SedeComp, {
     data: data,
     d2: d2
   }), !d2 && /*#__PURE__*/React.createElement("div", {
