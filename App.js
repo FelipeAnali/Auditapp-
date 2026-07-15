@@ -1579,12 +1579,18 @@ function FilterBar({
   setShowRetirados,
   ccostos,
   ccostoFilter,
-  setCcostoFilter
+  setCcostoFilter,
+  excSuperv,
+  setExcSuperv
 }) {
   const mn = data.allDates?.[0] || "",
     mx = data.allDates?.[data.allDates.length - 1] || "";
   const active = from || to;
   const invalid = from && to && from > to;
+  const [ccOpen, setCcOpen] = useState(false);
+  const toggleCc = v => {
+    setCcostoFilter(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
+  };
   return /*#__PURE__*/React.createElement("div", {
     style: {
       ...crd,
@@ -1593,7 +1599,7 @@ function FilterBar({
       alignItems: "center",
       gap: 12,
       flexWrap: "wrap",
-      background: invalid ? "#fde8e8" : active || sedeFilter || !showRetirados || ccostoFilter ? "#fff9e6" : "#f8faf8"
+      background: invalid ? "#fde8e8" : active || sedeFilter || !showRetirados || ccostoFilter.length ? "#fff9e6" : "#f8faf8"
     }
   }, sedes.length > 1 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
     style: {
@@ -1615,27 +1621,66 @@ function FilterBar({
   }, "Todas las sedes (", sedes.length, ")"), sedes.map(s => /*#__PURE__*/React.createElement("option", {
     key: s,
     value: s
-  }, s)))), ccostos.length > 1 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+  }, s)))), ccostos.length > 1 && /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 14
+      position: "relative"
     }
-  }, "🏷️"), /*#__PURE__*/React.createElement("select", {
-    value: ccostoFilter,
-    onChange: e => setCcostoFilter(e.target.value),
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setCcOpen(!ccOpen),
     style: {
       padding: "6px 10px",
       borderRadius: 8,
       border: "2px solid #e67e22",
       fontSize: 12,
       fontWeight: 600,
-      maxWidth: 220
+      background: ccostoFilter.length ? "#fff3e0" : "#fff",
+      color: "#333",
+      cursor: "pointer"
     }
-  }, /*#__PURE__*/React.createElement("option", {
-    value: ""
-  }, "Todas las secciones (", ccostos.length, ")"), ccostos.map(s => /*#__PURE__*/React.createElement("option", {
+  }, "🏷️ ", ccostoFilter.length ? ccostoFilter.length + " secciones" : "Secciones (" + ccostos.length + ")", " ▾"), ccOpen && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "absolute",
+      top: "100%",
+      left: 0,
+      zIndex: 999,
+      background: "#fff",
+      border: "1px solid #e67e22",
+      borderRadius: 8,
+      padding: 6,
+      maxHeight: 200,
+      overflowY: "auto",
+      minWidth: 220,
+      boxShadow: "0 4px 12px rgba(0,0,0,.15)"
+    }
+  }, ccostos.map(s => /*#__PURE__*/React.createElement("label", {
     key: s,
-    value: s
-  }, s)))), hasBD && /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 4,
+      padding: "3px 4px",
+      fontSize: 11,
+      cursor: "pointer",
+      borderRadius: 4,
+      background: ccostoFilter.includes(s) ? "#fff3e0" : "transparent"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: ccostoFilter.includes(s),
+    onChange: () => toggleCc(s)
+  }), s)), ccostoFilter.length > 0 && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setCcostoFilter([]),
+    style: {
+      width: "100%",
+      padding: 4,
+      fontSize: 10,
+      border: "none",
+      background: "#fde8e8",
+      borderRadius: 4,
+      cursor: "pointer",
+      marginTop: 4
+    }
+  }, "✕ Limpiar secciones"))), hasBD && /*#__PURE__*/React.createElement("label", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -1649,7 +1694,21 @@ function FilterBar({
     type: "checkbox",
     checked: !showRetirados,
     onChange: e => setShowRetirados(!e.target.checked)
-  }), showRetirados ? "👥 Con retirados" : "✅ Solo activos"), /*#__PURE__*/React.createElement("span", {
+  }), showRetirados ? "👥 Con retirados" : "✅ Solo activos"), hasBD && /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 4,
+      fontSize: 12,
+      fontWeight: 600,
+      color: excSuperv ? "#2ecc71" : "#9b59b6",
+      cursor: "pointer"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: excSuperv,
+    onChange: e => setExcSuperv(e.target.checked)
+  }), excSuperv ? "🚫 Sin supervisores" : "👔 Con supervisores"), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 14
     }
@@ -1688,12 +1747,12 @@ function FilterBar({
       border: `1px solid ${invalid ? "#e74c3c" : "#ddd"}`,
       fontSize: 12
     }
-  }), (active || sedeFilter || ccostoFilter) && /*#__PURE__*/React.createElement("button", {
+  }), (active || sedeFilter || ccostoFilter.length) && /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       setFrom("");
       setTo("");
       setSedeFilter("");
-      setCcostoFilter("");
+      setCcostoFilter([]);
     },
     style: {
       padding: "4px 10px",
@@ -1711,13 +1770,13 @@ function FilterBar({
       color: CL.dan,
       fontWeight: 600
     }
-  }, "❌ Desde no puede ser mayor que Hasta"), (active || sedeFilter || ccostoFilter) && !invalid && /*#__PURE__*/React.createElement("span", {
+  }, "❌ Desde no puede ser mayor que Hasta"), (active || sedeFilter || ccostoFilter.length) && !invalid && /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 11,
       color: CL.warn,
       fontWeight: 600
     }
-  }, "⚠️ Filtro", sedeFilter ? ` | ${sedeFilter}` : "", ccostoFilter ? ` | ${ccostoFilter}` : ""));
+  }, "⚠️ Filtro", sedeFilter ? ` | ${sedeFilter}` : "", ccostoFilter.length ? ` | ${ccostoFilter.join(", ")}` : ""));
 }
 
 /* ═══ DASHBOARD ═══ */
@@ -5488,7 +5547,8 @@ function App() {
   const [dateTo, setDateTo] = useState("");
   const [sedeFilter, setSedeFilter] = useState("");
   const [showRetirados, setShowRetirados] = useState(true);
-  const [ccostoFilter, setCcostoFilter] = useState("");
+  const [ccostoFilter, setCcostoFilter] = useState([]);
+  const [excSuperv, setExcSuperv] = useState(true);
   const sedes = useMemo(() => {
     if (!raw) return [];
     const s = [...new Set(raw.cajeros.map(c => c.sede).filter(Boolean))].sort();
@@ -5503,7 +5563,8 @@ function App() {
     if (!raw) return null;
     let cajeros = raw.cajeros;
     if (hasBD && !showRetirados) cajeros = cajeros.filter(c => c.activo !== false);
-    if (ccostoFilter) cajeros = cajeros.filter(c => c.ccosto === ccostoFilter);
+    if (hasBD && excSuperv) cajeros = cajeros.filter(c => !c.cargo || !c.cargo.toUpperCase().includes("SUPERVISOR"));
+    if (ccostoFilter.length > 0) cajeros = cajeros.filter(c => ccostoFilter.includes(c.ccosto));
     if (sedeFilter && sedes.length > 1) {
       cajeros = cajeros.filter(c => c.sede === sedeFilter);
     }
@@ -5568,7 +5629,7 @@ function App() {
       hasSched: cajeros.some(c => c.hrsHor !== null),
       hasBD
     };
-  }, [raw, sedeFilter, sedes, showRetirados, hasBD, ccostoFilter]);
+  }, [raw, sedeFilter, sedes, showRetirados, hasBD, ccostoFilter, excSuperv]);
   const data = useMemo(() => sedeData ? filterByDates(sedeData, dateFrom, dateTo) : null, [sedeData, dateFrom, dateTo]);
   const applyKPI = () => {
     const c = parseFloat(kC),
@@ -5965,7 +6026,7 @@ function App() {
         setDateFrom("");
         setDateTo("");
         setSedeFilter("");
-        setCcostoFilter("");
+        setCcostoFilter([]);
       }
     },
     style: {
@@ -5998,7 +6059,9 @@ function App() {
     setShowRetirados: setShowRetirados,
     ccostos: ccostos,
     ccostoFilter: ccostoFilter,
-    setCcostoFilter: setCcostoFilter
+    setCcostoFilter: setCcostoFilter,
+    excSuperv: excSuperv,
+    setExcSuperv: setExcSuperv
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 14

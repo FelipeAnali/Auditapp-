@@ -379,23 +379,30 @@ function Upload({onData}){const r1=useRef(),r2=useRef(),r3=useRef(),r4=useRef();
       {er&&<div style={{marginTop:10,padding:"8px 14px",background:"rgba(231,76,60,.2)",borderRadius:12,color:"#fff",fontSize:13}}>⚠️ {er}</div>}</div></div>);}
 
 /* ═══ FILTER BAR ═══ */
-function FilterBar(props){const {data, from, to, setFrom, setTo, sedes, sedeFilter, setSedeFilter, hasBD, showRetirados, setShowRetirados, ccostos, ccostoFilter, setCcostoFilter} = props;
-return <div style={{...crd,padding:"10px 16px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",background:invalid?"#fde8e8":"#f8faf8"}}>
-    {sedes.length>1&&<><span style={{fontSize:14}}>🏢</span><select multiple value={sedeFilter} onChange={e=>{const v=Array.from(e.target.selectedOptions,o=>o.value);setSedeFilter(v.filter(x=>x!==""));}} style={{minHeight:"65px",borderRadius:8}}><option value="">Todas las sedes ({sedes.length})</option>{sedes.map(s=><option key={s} value={s}>{s}</option>)}</select></>}
-    
-    {ccostos.length>1&&<><span style={{fontSize:14}}>🏷️</span><select multiple value={ccostoFilter} onChange={e=>{const v=Array.from(e.target.selectedOptions,o=>o.value);setCcostoFilter(v.filter(x=>x!==""));}} style={{minHeight:"65px",borderRadius:8}}><option value="">Todas las secciones ({ccostos.length})</option>{ccostos.map(s=><option key={s} value={s}>{s}</option>)}</select></>}
-    
-    {hasBD&&<label style={{display:"flex",alignItems:"center",gap:4,fontSize:12,fontWeight:600,color:showRetirados?"#e74c3c":"#2ecc71"}}><input type="checkbox" checked={!showRetirados} onChange={e=>setShowRetirados(!e.target.checked)}/>{showRetirados?"👥 Con retirados":"✅ Solo activos"}</label>}
-    
+function FilterBar({data,from,to,setFrom,setTo,sedes,sedeFilter,setSedeFilter,hasBD,showRetirados,setShowRetirados,ccostos,ccostoFilter,setCcostoFilter,excSuperv,setExcSuperv}){const mn=data.allDates?.[0]||"",mx=data.allDates?.[data.allDates.length-1]||"";const active=from||to;const invalid=from&&to&&from>to;
+  const[ccOpen,setCcOpen]=useState(false);
+  const toggleCc=v=>{setCcostoFilter(prev=>prev.includes(v)?prev.filter(x=>x!==v):[...prev,v]);};
+  return <div style={{...crd,padding:"10px 16px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",background:invalid?"#fde8e8":active||sedeFilter||!showRetirados||ccostoFilter.length?"#fff9e6":"#f8faf8"}}>
+    {sedes.length>1&&<><span style={{fontSize:14}}>🏢</span><select value={sedeFilter} onChange={e=>setSedeFilter(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"2px solid #9b59b6",fontSize:12,fontWeight:600,maxWidth:200}}>
+      <option value="">Todas las sedes ({sedes.length})</option>{sedes.map(s=><option key={s} value={s}>{s}</option>)}</select></>}
+    {ccostos.length>1&&<div style={{position:"relative"}}><button onClick={()=>setCcOpen(!ccOpen)} style={{padding:"6px 10px",borderRadius:8,border:"2px solid #e67e22",fontSize:12,fontWeight:600,background:ccostoFilter.length?"#fff3e0":"#fff",color:"#333",cursor:"pointer"}}>
+      🏷️ {ccostoFilter.length?ccostoFilter.length+" secciones":"Secciones ("+ccostos.length+")"} ▾</button>
+      {ccOpen&&<div style={{position:"absolute",top:"100%",left:0,zIndex:999,background:"#fff",border:"1px solid #e67e22",borderRadius:8,padding:6,maxHeight:200,overflowY:"auto",minWidth:220,boxShadow:"0 4px 12px rgba(0,0,0,.15)"}}>
+        {ccostos.map(s=><label key={s} style={{display:"flex",alignItems:"center",gap:4,padding:"3px 4px",fontSize:11,cursor:"pointer",borderRadius:4,background:ccostoFilter.includes(s)?"#fff3e0":"transparent"}}>
+          <input type="checkbox" checked={ccostoFilter.includes(s)} onChange={()=>toggleCc(s)}/>{s}</label>)}
+        {ccostoFilter.length>0&&<button onClick={()=>setCcostoFilter([])} style={{width:"100%",padding:4,fontSize:10,border:"none",background:"#fde8e8",borderRadius:4,cursor:"pointer",marginTop:4}}>✕ Limpiar secciones</button>}
+      </div>}</div>}
+    {hasBD&&<label style={{display:"flex",alignItems:"center",gap:4,fontSize:12,fontWeight:600,color:showRetirados?"#e74c3c":"#2ecc71",cursor:"pointer"}}>
+      <input type="checkbox" checked={!showRetirados} onChange={e=>setShowRetirados(!e.target.checked)}/>{showRetirados?"👥 Con retirados":"✅ Solo activos"}</label>}
+    {hasBD&&<label style={{display:"flex",alignItems:"center",gap:4,fontSize:12,fontWeight:600,color:excSuperv?"#2ecc71":"#9b59b6",cursor:"pointer"}}>
+      <input type="checkbox" checked={excSuperv} onChange={e=>setExcSuperv(e.target.checked)}/>{excSuperv?"🚫 Sin supervisores":"👔 Con supervisores"}</label>}
     <span style={{fontSize:14}}>📅</span><span style={{fontSize:12,fontWeight:700,color:CL.txtL}}>Fechas:</span>
-    <input type="date" value={from} min={mn} max={to||mx} onChange={e=>setFrom(e.target.value)} style={{padding:"6px 10px",borderRadius:8}}/>
+    <input type="date" value={from} min={mn} max={to||mx} onChange={e=>setFrom(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:`1px solid ${invalid?"#e74c3c":"#ddd"}`,fontSize:12}}/>
     <span style={{fontSize:12,color:CL.txtL}}>a</span>
-    <input type="date" value={to} min={from||mn} max={mx} onChange={e=>setTo(e.target.value)} style={{padding:"6px 10px",borderRadius:8}}/>
-    
-    {(active||sedeFilter.length>0||ccostoFilter.length>0)&&<button onClick={()=>{setFrom("");setTo("");setSedeFilter([]);setCcostoFilter([]);}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid #e74c3c",background:"#fff",color:"#e74c3c",cursor:"pointer",fontWeight:600}}>✕ Limpiar</button>}
-    
+    <input type="date" value={to} min={from||mn} max={mx} onChange={e=>setTo(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:`1px solid ${invalid?"#e74c3c":"#ddd"}`,fontSize:12}}/>
+    {(active||sedeFilter||ccostoFilter.length)&&<button onClick={()=>{setFrom("");setTo("");setSedeFilter("");setCcostoFilter([]);}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid #e74c3c",background:"#fff",color:"#e74c3c",fontSize:11,cursor:"pointer",fontWeight:600}}>✕ Limpiar</button>}
     {invalid&&<span style={{fontSize:11,color:CL.dan,fontWeight:600}}>❌ Desde no puede ser mayor que Hasta</span>}
-    {(active||sedeFilter.length>0||ccostoFilter.length>0)&&!invalid&&<span style={{fontSize:11,color:CL.warn,fontWeight:600}}>⚠️ Filtro aplicado</span>}
+    {(active||sedeFilter||ccostoFilter.length)&&!invalid&&<span style={{fontSize:11,color:CL.warn,fontWeight:600}}>⚠️ Filtro{sedeFilter?` | ${sedeFilter}`:""}{ccostoFilter.length?` | ${ccostoFilter.join(", ")}`:""}</span>}
   </div>;}
 
 /* ═══ DASHBOARD ═══ */
@@ -863,42 +870,29 @@ export default function App(){
   const[raw,setRaw]=useState(null);const[view,setView]=useState("da");const[sel,setSel]=useState("");const[report,setReport]=useState(null);
   const[showKPI,setShowKPI]=useState(false);const[kC,setKC]=useState("");const[kE,setKE]=useState("");
   const[dateFrom,setDateFrom]=useState("");const[dateTo,setDateTo]=useState("");
-  const[ccostoFilter,setCcostoFilter]=useState([]);
+  const[sedeFilter,setSedeFilter]=useState("");
   const[showRetirados,setShowRetirados]=useState(true);
-  const[ccostoFilter,setCcostoFilter]=useState("");
+  const[ccostoFilter,setCcostoFilter]=useState([]);
+  const[excSuperv,setExcSuperv]=useState(true);
 
   const sedes=useMemo(()=>{if(!raw)return[];const s=[...new Set(raw.cajeros.map(c=>c.sede).filter(Boolean))].sort();return s;},[raw]);
   const hasBD=raw?raw.cajeros.some(c=>c.activo!==null):false;
   const ccostos=useMemo(()=>{if(!raw||!hasBD)return[];return[...new Set(raw.cajeros.map(c=>c.ccosto).filter(Boolean))].sort();},[raw,hasBD]);
   const sedeData=useMemo(()=>{if(!raw)return null;
     let cajeros=raw.cajeros;
-
-    // --- NUEVO FILTRO DE CARGOS (EXCLUYE SUPERVISORES) ---
-    cajeros = cajeros.filter(c => {
-      if (!c.cargo) return true; 
-      const cargoDesc = c.cargo.toLowerCase();
-      if (cargoDesc.includes("supervisor")) return false;
-      if (cargoDesc.includes("asesor") || cargoDesc.includes("cajero")) return true;
-      return false;
-    });
-    // -----------------------------------------------------
-
     if(hasBD&&!showRetirados)cajeros=cajeros.filter(c=>c.activo!==false);
-    
-    // --- FILTROS MÚLTIPLES ---
+    if(hasBD&&excSuperv)cajeros=cajeros.filter(c=>!c.cargo||!c.cargo.toUpperCase().includes("SUPERVISOR"));
     if(ccostoFilter.length>0)cajeros=cajeros.filter(c=>ccostoFilter.includes(c.ccosto));
-    if(sedeFilter.length>0&&sedes.length>1){cajeros=cajeros.filter(c=>sedeFilter.includes(c.sede));}
-    // -------------------------
-
+    if(sedeFilter&&sedes.length>1){cajeros=cajeros.filter(c=>c.sede===sedeFilter);}
     if(cajeros.length===0)return{...raw,cajeros:[],avg:0,avgR:0,tR:0,tF:0,dS:[],allDates:[],hasBD};
-    if(cajeros===raw.cajeros&&sedeFilter.length===0)return{...raw,hasBD};
+    if(cajeros===raw.cajeros&&!sedeFilter)return{...raw,hasBD};
     const avg=cajeros.reduce((s,c)=>s+c.pfH,0)/cajeros.length;const avgR=cajeros.reduce((s,c)=>s+c.prH,0)/cajeros.length;
     rankCajeros(cajeros,avg,raw.kpiCfg);
     const allDates=[...new Set(cajeros.flatMap(c=>c.dias.map(d=>d.fecha)))].sort();
     const dS=allDates.map(dk=>{let f=0,r=0,h=0,a=0;cajeros.forEach(c=>{const d=c.dias.find(x=>x.fecha===dk);if(d){f+=d.facs;r+=d.regs;h+=d.hrs;a++;}});return{fecha:dk,fechaD:fD(new Date(dk+"T12:00:00")),facs:f,regs:r,hrs:h,activos:a,fH:h>0?f/h:0};});
     const sede=sedeFilter||raw.sede;
-   return {...raw,cajeros,avg,avgR,sede,tR:cajeros.reduce((s,c)=>s+c.tR,0),tF:cajeros.reduce((s,c)=>s+c.tF,0),periodo:{desde:allDates[0]||"",hasta:allDates[allDates.length-1]||""}};
-  },[raw,sedeFilter,sedes,showRetirados,hasBD,ccostoFilter]);
+    return{...raw,cajeros,avg,avgR,sede,tR:cajeros.reduce((s,c)=>s+c.tR,0),tF:cajeros.reduce((s,c)=>s+c.tF,0),periodo:{desde:allDates[0]||raw.periodo.desde,hasta:allDates[allDates.length-1]||raw.periodo.hasta},dS,allDates,hasSched:cajeros.some(c=>c.hrsHor!==null),hasBD};
+  },[raw,sedeFilter,sedes,showRetirados,hasBD,ccostoFilter,excSuperv]);
   const data=useMemo(()=>sedeData?filterByDates(sedeData,dateFrom,dateTo):null,[sedeData,dateFrom,dateTo]);
 
   const applyKPI=()=>{const c=parseFloat(kC),e=parseFloat(kE);if(!isNaN(c)&&!isNaN(e)&&c>e){setRaw(recalcKPIs(raw,{active:true,cumple:c,enProm:e}));setShowKPI(false);}};
@@ -941,9 +935,9 @@ export default function App(){
         <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>{vs.map(v=><button key={v.id} onClick={()=>setView(v.id)} title={vLabels[v.id]} style={{background:view===v.id?"rgba(255,255,255,.22)":"transparent",color:"#fff",border:`1px solid ${view===v.id?"rgba(255,255,255,.4)":"transparent"}`,padding:"6px 10px",borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:view===v.id?600:400}}>{v.l}<span className="nav-lbl" style={{marginLeft:3}}>{vLabels[v.id]}</span></button>)}
           <button onClick={()=>{setShowKPI(true);if(hC){setKC(String(data.kpiCfg.cumple));setKE(String(data.kpiCfg.enProm));}}} style={{background:hC?"rgba(255,200,0,.3)":"transparent",color:"#fff",border:`1px solid ${hC?"rgba(255,200,0,.5)":"transparent"}`,padding:"6px 10px",borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:hC?700:400}}>⚙️</button>
           <button onClick={()=>saveSnapshot(raw)} title="Guardar memoria" style={{background:"transparent",color:"#fff",border:"1px solid transparent",padding:"6px 10px",borderRadius:7,cursor:"pointer",fontSize:11}}>💾</button></div>
-        <button onClick={()=>{if(window.confirm("¿Seguro? Se perdera el analisis actual.\nGuarda la memoria (💾) si quieres conservarlo.")){setRaw(null);setView("da");setDateFrom("");setDateTo("");setSedeFilter("");setCcostoFilter("");}}} style={{padding:"4px 10px",borderRadius:7,border:"1px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.12)",color:"#fff",fontSize:11,cursor:"pointer"}}>🔄</button></div></nav>
+        <button onClick={()=>{if(window.confirm("¿Seguro? Se perdera el analisis actual.\nGuarda la memoria (💾) si quieres conservarlo.")){setRaw(null);setView("da");setDateFrom("");setDateTo("");setSedeFilter("");setCcostoFilter([]);}}} style={{padding:"4px 10px",borderRadius:7,border:"1px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.12)",color:"#fff",fontSize:11,cursor:"pointer"}}>🔄</button></div></nav>
     <div className="aud-content" style={{maxWidth:1280,margin:"0 auto",padding:"16px"}}>
-      <FilterBar data={raw} from={dateFrom} to={dateTo} setFrom={setDateFrom} setTo={setDateTo} sedes={sedes} sedeFilter={sedeFilter} setSedeFilter={setSedeFilter} hasBD={hasBD} showRetirados={showRetirados} setShowRetirados={setShowRetirados} ccostos={ccostos} ccostoFilter={ccostoFilter} setCcostoFilter={setCcostoFilter}/>
+      <FilterBar data={raw} from={dateFrom} to={dateTo} setFrom={setDateFrom} setTo={setDateTo} sedes={sedes} sedeFilter={sedeFilter} setSedeFilter={setSedeFilter} hasBD={hasBD} showRetirados={showRetirados} setShowRetirados={setShowRetirados} ccostos={ccostos} ccostoFilter={ccostoFilter} setCcostoFilter={setCcostoFilter} excSuperv={excSuperv} setExcSuperv={setExcSuperv}/>
       <div style={{marginTop:14}}><ErrBound>
         {view==="da"&&<Dash data={data} showR={setReport}/>}
         {view==="in"&&<Indiv data={data} sel={sel} setSel={setSel} showR={setReport}/>}
