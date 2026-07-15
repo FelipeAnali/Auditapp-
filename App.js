@@ -4132,13 +4132,19 @@ function PComp({
         ...c,
         prev: null,
         dFH: null,
-        dRk: null
+        dRk: null,
+        dReg: null,
+        dDias: null,
+        dRHM: null
       };
       return {
         ...c,
         prev: c2,
         dFH: c.pfH - c2.pfH,
-        dRk: c2.rank - c.rank
+        dRk: c2.rank - c.rank,
+        dReg: c.tR - c2.tR,
+        dDias: c.numDias - c2.numDias,
+        dRHM: c.rHMar && c2.rHMar ? c.rHMar - c2.rHMar : null
       };
     }).sort((a, b) => (b.dFH || 0) - (a.dFH || 0));
   }, [data, d2, mode]);
@@ -4165,13 +4171,13 @@ function PComp({
       fontSize: 15,
       fontWeight: 700
     }
-  }, "📈 Comparar Periodos / Sedes"), /*#__PURE__*/React.createElement("p", {
+  }, "📈 Comparar Periodos"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: CL.txtL,
       margin: 0
     }
-  }, "Sube un archivo ", /*#__PURE__*/React.createElement("b", null, ".json"), " (guardado con 💾) o un ", /*#__PURE__*/React.createElement("b", null, ".xlsx"), " de otro periodo u otra sede. La app detecta automaticamente si es la misma sede o una diferente.")), /*#__PURE__*/React.createElement(Btn, {
+  }, "Sube un ", /*#__PURE__*/React.createElement("b", null, ".json"), " (guardado con 💾) o ", /*#__PURE__*/React.createElement("b", null, ".xlsx"), " de otro periodo.")), /*#__PURE__*/React.createElement(Btn, {
     green: true,
     onClick: () => saveSnapshot(raw)
   }, "💾 Guardar Memoria")), /*#__PURE__*/React.createElement("p", {
@@ -4180,7 +4186,7 @@ function PComp({
       color: CL.txtL,
       marginBottom: 8
     }
-  }, "📍 Actual: ", /*#__PURE__*/React.createElement("b", null, data.sede), " | ", data.periodo.desde, " a ", data.periodo.hasta, " | ", data.cajeros.length, " cajeros | Prom: ", fN(data.avg), " f/h"), /*#__PURE__*/React.createElement("div", {
+  }, "📍 Actual: ", /*#__PURE__*/React.createElement("b", null, data.sede), " | ", data.periodo.desde, " a ", data.periodo.hasta, " | ", data.cajeros.length, " cajeros"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -4192,14 +4198,14 @@ function PComp({
     style: {
       padding: "10px 20px",
       borderRadius: 10,
-      border: `2px dashed ${d2 ? mode === "sede" ? "#9b59b6" : CL.pri : CL.pri}`,
-      background: d2 ? mode === "sede" ? "#f3e8ff" : CL.priLt : "#fff",
-      color: d2 ? mode === "sede" ? "#9b59b6" : CL.pri : CL.pri,
+      border: `2px dashed ${d2 ? CL.pri : CL.pri}`,
+      background: d2 ? CL.priLt : "#fff",
+      color: CL.pri,
       fontSize: 13,
       fontWeight: 700,
       cursor: "pointer"
     }
-  }, d2 ? `✅ ${d2.sede} (${d2.cajeros.length} cajeros)` : "📁 Subir .json o .xlsx"), /*#__PURE__*/React.createElement("input", {
+  }, d2 ? `✅ ${d2.sede} (${d2.cajeros.length} caj)` : "📁 Subir .json o .xlsx"), /*#__PURE__*/React.createElement("input", {
     ref: r2,
     type: "file",
     accept: ".xlsx,.xls,.xlsm,.csv,.json",
@@ -4229,25 +4235,86 @@ function PComp({
   }, "✕ Quitar")), st && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
-      color: mode === "sede" ? "#9b59b6" : CL.pri,
+      color: CL.pri,
       marginTop: 8,
       fontWeight: 600
     }
   }, st)), comp && mode === "periodo" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...crd,
+      background: `linear-gradient(135deg,${CL.priDk},${CL.pri})`,
+      color: "#fff",
+      padding: "16px 20px"
+    }
+  }, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      margin: "0 0 10px",
+      fontSize: 16,
+      fontWeight: 800
+    }
+  }, "📊 ", d2.periodo.desde, " → ", data.periodo.desde), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))",
+      gap: 10
+    }
+  }, [{
+    l: "Facturas",
+    a: d2.tF,
+    b: data.tF
+  }, {
+    l: "Registros",
+    a: d2.tR,
+    b: data.tR
+  }, {
+    l: "Cajeros",
+    a: d2.cajeros.length,
+    b: data.cajeros.length
+  }, {
+    l: "Prom F/H",
+    a: d2.avg,
+    b: data.avg,
+    dec: true
+  }, {
+    l: "Dias",
+    a: d2.dS.length,
+    b: data.dS.length
+  }].map(m => {
+    const d = m.dec ? (m.b - m.a).toFixed(1) : m.b - m.a;
+    const up = d > 0;
+    return /*#__PURE__*/React.createElement("div", {
+      key: m.l,
+      style: {
+        background: "rgba(255,255,255,.12)",
+        borderRadius: 8,
+        padding: "8px 10px",
+        textAlign: "center"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 10,
+        opacity: .7
+      }
+    }, m.l), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11
+      }
+    }, m.dec ? fN(m.a) : m.a.toLocaleString(), " → ", /*#__PURE__*/React.createElement("b", null, m.dec ? fN(m.b) : m.b.toLocaleString())), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 800,
+        color: up ? "#7dff7d" : "#ff9999"
+      }
+    }, up ? "+" : "", m.dec ? d : d.toLocaleString()));
+  }))), /*#__PURE__*/React.createElement("div", {
     style: crd
   }, /*#__PURE__*/React.createElement("h3", {
     style: {
-      margin: "0 0 4px",
+      margin: "0 0 10px",
       fontSize: 14,
       fontWeight: 700
     }
-  }, "📅 Evolucion: ", d2.periodo.desde, "/", d2.periodo.hasta, " → ", data.periodo.desde, "/", data.periodo.hasta), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      color: CL.txtL,
-      margin: "0 0 10px"
-    }
-  }, "Prom antes: ", /*#__PURE__*/React.createElement("b", null, fN(d2.avg)), " → Prom ahora: ", /*#__PURE__*/React.createElement("b", null, fN(data.avg)), " (", data.avg > d2.avg ? `+${fN(data.avg - d2.avg)} ↑` : data.avg < d2.avg ? `${fN(data.avg - d2.avg)} ↓` : "igual", ")"), /*#__PURE__*/React.createElement("div", {
+  }, "📋 Comparativa por Cajero"), /*#__PURE__*/React.createElement("div", {
     style: {
       overflowX: "auto"
     }
@@ -4256,7 +4323,7 @@ function PComp({
       width: "100%",
       borderCollapse: "collapse"
     }
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ["#", "Cajero", "F/H Antes", "F/H Ahora", "Cambio", "Rank Antes", "Rank Ahora", "Mov"].map(h => /*#__PURE__*/React.createElement("th", {
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ["#", "Cajero", "Reg Ant", "Reg Act", "ΔReg", "Dias Ant", "Dias Act", "F/H Ant", "F/H Act", "ΔF/H", "Rank Ant", "Rank Act", "Mov"].map(h => /*#__PURE__*/React.createElement("th", {
     key: h,
     style: TH
   }, h)))), /*#__PURE__*/React.createElement("tbody", null, comp.map(c => {
@@ -4265,7 +4332,7 @@ function PComp({
     return /*#__PURE__*/React.createElement("tr", {
       key: c.nombre,
       style: {
-        background: c.prev ? up ? "#e6f9ee" : dn ? "#fde8e8" : "#fff" : "#f8f8f8"
+        background: c.prev ? up ? "#f0faf4" : dn ? "#fef5f5" : "#fffcf0" : "#f8f8f8"
       }
     }, /*#__PURE__*/React.createElement("td", {
       style: {
@@ -4279,7 +4346,31 @@ function PComp({
         fontSize: 11
       }
     }, c.nombre, rBadge(c)), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...TD,
+        fontSize: 11
+      }
+    }, c.prev ? c.prev.tR.toLocaleString() : "-"), /*#__PURE__*/React.createElement("td", {
       style: TD
+    }, c.tR.toLocaleString()), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...TD,
+        fontSize: 11,
+        fontWeight: 600,
+        color: c.dReg > 0 ? "#2ecc71" : c.dReg < 0 ? "#e74c3c" : "#666"
+      }
+    }, c.dReg !== null ? (c.dReg > 0 ? "+" : "") + c.dReg.toLocaleString() : "-"), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...TD,
+        fontSize: 11
+      }
+    }, c.prev ? c.prev.numDias : "-"), /*#__PURE__*/React.createElement("td", {
+      style: TD
+    }, c.numDias), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...TD,
+        fontSize: 11
+      }
     }, c.prev ? fN(c.prev.pfH) : "-"), /*#__PURE__*/React.createElement("td", {
       style: {
         ...TD,
@@ -4290,10 +4381,13 @@ function PComp({
         ...TD,
         fontWeight: 800,
         color: up ? "#2ecc71" : dn ? "#e74c3c" : "#666",
-        fontSize: 14
+        fontSize: 13
       }
     }, c.dFH !== null ? `${up ? "+" : ""}${fN(c.dFH)}` : "-"), /*#__PURE__*/React.createElement("td", {
-      style: TD
+      style: {
+        ...TD,
+        fontSize: 11
+      }
     }, c.prev ? `#${c.prev.rank}` : "-"), /*#__PURE__*/React.createElement("td", {
       style: TD
     }, "#", c.rank), /*#__PURE__*/React.createElement("td", {
@@ -4341,7 +4435,7 @@ function PComp({
       fontWeight: 800,
       color: "#2ecc71"
     }
-  }, "+", fN(c.dFH)))), comp.filter(c => c.dFH > 0).length === 0 && /*#__PURE__*/React.createElement("p", {
+  }, "+", fN(c.dFH), " f/h | +", (c.dReg || 0).toLocaleString(), " reg"))), comp.filter(c => c.dFH > 0).length === 0 && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: CL.txtL
@@ -4376,7 +4470,7 @@ function PComp({
       fontWeight: 800,
       color: "#e74c3c"
     }
-  }, fN(c.dFH)))), comp.filter(c => c.dFH !== null && c.dFH < 0).length === 0 && /*#__PURE__*/React.createElement("p", {
+  }, fN(c.dFH), " f/h | ", (c.dReg || 0).toLocaleString(), " reg"))), comp.filter(c => c.dFH !== null && c.dFH < 0).length === 0 && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: CL.txtL
@@ -4393,7 +4487,7 @@ function PComp({
       fontWeight: 700,
       color: CL.warn
     }
-  }, "🆕 Nuevos (no estaban en periodo anterior)"), comp.filter(c => !c.prev).map(c => /*#__PURE__*/React.createElement("span", {
+  }, "🆕 Nuevos (no estaban antes)"), comp.filter(c => !c.prev).map(c => /*#__PURE__*/React.createElement("span", {
     key: c.nombre,
     style: {
       display: "inline-block",
@@ -4404,7 +4498,30 @@ function PComp({
       fontSize: 11,
       fontWeight: 600
     }
-  }, c.nombre, " (", fN(c.pfH), " f/h)")))), d2 && mode === "sede" && /*#__PURE__*/React.createElement(SedeComp, {
+  }, c.nombre, " (", fN(c.pfH), " f/h)"))), d2.cajeros.filter(c2 => !data.cajeros.find(c => c.nombre === c2.nombre)).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...crd,
+      borderLeft: "4px solid #95a5a6"
+    }
+  }, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      margin: "0 0 8px",
+      fontSize: 13,
+      fontWeight: 700,
+      color: "#95a5a6"
+    }
+  }, "👋 Salieron (estaban antes, ya no)"), d2.cajeros.filter(c2 => !data.cajeros.find(c => c.nombre === c2.nombre)).map(c2 => /*#__PURE__*/React.createElement("span", {
+    key: c2.nombre,
+    style: {
+      display: "inline-block",
+      padding: "3px 10px",
+      margin: 2,
+      borderRadius: 12,
+      background: "#f0f0f0",
+      fontSize: 11,
+      fontWeight: 600
+    }
+  }, c2.nombre, " (", fN(c2.pfH), " f/h)")))), d2 && mode === "sede" && /*#__PURE__*/React.createElement(SedeComp, {
     data: data,
     d2: d2
   }), !d2 && /*#__PURE__*/React.createElement("div", {

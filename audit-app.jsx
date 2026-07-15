@@ -638,41 +638,62 @@ function PComp({data}){const r2=useRef();const[d2,setD2]=useState(null);const[st
     setSt(same?`📅 Misma sede detectada → Comparacion de periodos | ${d.cajeros.length} cajeros | ${d.periodo.desde} a ${d.periodo.hasta}`:`🏢 Sede diferente detectada: ${d.sede} → Comparacion entre sedes | ${d.cajeros.length} cajeros`);}catch(e){setSt("Error: "+e.message);}}, [data]);
 
   const comp=useMemo(()=>{if(!d2||mode!=="periodo")return null;
-    return data.cajeros.map(c=>{const c2=d2.cajeros.find(x=>x.nombre===c.nombre);if(!c2)return{...c,prev:null,dFH:null,dRk:null};return{...c,prev:c2,dFH:c.pfH-c2.pfH,dRk:c2.rank-c.rank};}).sort((a,b)=>(b.dFH||0)-(a.dFH||0));},[data,d2,mode]);
+    return data.cajeros.map(c=>{const c2=d2.cajeros.find(x=>x.nombre===c.nombre);
+      if(!c2)return{...c,prev:null,dFH:null,dRk:null,dReg:null,dDias:null,dRHM:null};
+      return{...c,prev:c2,dFH:c.pfH-c2.pfH,dRk:c2.rank-c.rank,dReg:c.tR-c2.tR,dDias:c.numDias-c2.numDias,dRHM:c.rHMar&&c2.rHMar?c.rHMar-c2.rHMar:null};}).sort((a,b)=>(b.dFH||0)-(a.dFH||0));},[data,d2,mode]);
 
   return <div style={{display:"flex",flexDirection:"column",gap:14}}>
     <div style={crd}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8,marginBottom:10}}>
-        <div><h3 style={{margin:"0 0 4px",fontSize:15,fontWeight:700}}>📈 Comparar Periodos / Sedes</h3>
-          <p style={{fontSize:12,color:CL.txtL,margin:0}}>Sube un archivo <b>.json</b> (guardado con 💾) o un <b>.xlsx</b> de otro periodo u otra sede. La app detecta automaticamente si es la misma sede o una diferente.</p></div>
+        <div><h3 style={{margin:"0 0 4px",fontSize:15,fontWeight:700}}>📈 Comparar Periodos</h3>
+          <p style={{fontSize:12,color:CL.txtL,margin:0}}>Sube un <b>.json</b> (guardado con 💾) o <b>.xlsx</b> de otro periodo.</p></div>
         <Btn green onClick={()=>saveSnapshot(raw)}>💾 Guardar Memoria</Btn></div>
-      <p style={{fontSize:12,color:CL.txtL,marginBottom:8}}>📍 Actual: <b>{data.sede}</b> | {data.periodo.desde} a {data.periodo.hasta} | {data.cajeros.length} cajeros | Prom: {fN(data.avg)} f/h</p>
+      <p style={{fontSize:12,color:CL.txtL,marginBottom:8}}>📍 Actual: <b>{data.sede}</b> | {data.periodo.desde} a {data.periodo.hasta} | {data.cajeros.length} cajeros</p>
       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-        <button onClick={()=>r2.current?.click()} style={{padding:"10px 20px",borderRadius:10,border:`2px dashed ${d2?mode==="sede"?"#9b59b6":CL.pri:CL.pri}`,background:d2?mode==="sede"?"#f3e8ff":CL.priLt:"#fff",color:d2?mode==="sede"?"#9b59b6":CL.pri:CL.pri,fontSize:13,fontWeight:700,cursor:"pointer"}}>{d2?`✅ ${d2.sede} (${d2.cajeros.length} cajeros)`:"📁 Subir .json o .xlsx"}</button>
+        <button onClick={()=>r2.current?.click()} style={{padding:"10px 20px",borderRadius:10,border:`2px dashed ${d2?CL.pri:CL.pri}`,background:d2?CL.priLt:"#fff",color:CL.pri,fontSize:13,fontWeight:700,cursor:"pointer"}}>{d2?`✅ ${d2.sede} (${d2.cajeros.length} caj)`:"📁 Subir .json o .xlsx"}</button>
         <input ref={r2} type="file" accept=".xlsx,.xls,.xlsm,.csv,.json" style={{display:"none"}} onChange={e=>{if(e.target.files[0])load2(e.target.files[0]);e.target.value="";}}/>
         {d2&&<button onClick={()=>{setD2(null);setMode(null);setSt("");}} style={{padding:"6px 12px",borderRadius:8,border:"1px solid #e74c3c",background:"#fff",color:"#e74c3c",fontSize:11,cursor:"pointer",fontWeight:600}}>✕ Quitar</button>}
       </div>
-      {st&&<p style={{fontSize:12,color:mode==="sede"?"#9b59b6":CL.pri,marginTop:8,fontWeight:600}}>{st}</p>}</div>
+      {st&&<p style={{fontSize:12,color:CL.pri,marginTop:8,fontWeight:600}}>{st}</p>}</div>
 
-    {/* PERIOD COMPARISON */}
-    {comp&&mode==="periodo"&&<><div style={crd}><h3 style={{margin:"0 0 4px",fontSize:14,fontWeight:700}}>📅 Evolucion: {d2.periodo.desde}/{d2.periodo.hasta} → {data.periodo.desde}/{data.periodo.hasta}</h3>
-      <p style={{fontSize:12,color:CL.txtL,margin:"0 0 10px"}}>Prom antes: <b>{fN(d2.avg)}</b> → Prom ahora: <b>{fN(data.avg)}</b> ({data.avg>d2.avg?`+${fN(data.avg-d2.avg)} ↑`:data.avg<d2.avg?`${fN(data.avg-d2.avg)} ↓`:"igual"})</p>
-      <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["#","Cajero","F/H Antes","F/H Ahora","Cambio","Rank Antes","Rank Ahora","Mov"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead>
-        <tbody>{comp.map(c=>{const up=c.dFH>0,dn=c.dFH<0;return <tr key={c.nombre} style={{background:c.prev?up?"#e6f9ee":dn?"#fde8e8":"#fff":"#f8f8f8"}}>
-          <td style={{...TD,fontWeight:800}}>{c.rank}</td><td style={{...TD,fontWeight:600,fontSize:11}}>{c.nombre}{rBadge(c)}</td>
-          <td style={TD}>{c.prev?fN(c.prev.pfH):"-"}</td><td style={{...TD,fontWeight:700}}>{fN(c.pfH)}</td>
-          <td style={{...TD,fontWeight:800,color:up?"#2ecc71":dn?"#e74c3c":"#666",fontSize:14}}>{c.dFH!==null?`${up?"+":""}${fN(c.dFH)}`:"-"}</td>
-          <td style={TD}>{c.prev?`#${c.prev.rank}`:"-"}</td><td style={TD}>#{c.rank}</td>
-          <td style={{...TD,fontWeight:700,fontSize:14,color:c.dRk>0?"#2ecc71":c.dRk<0?"#e74c3c":"#666"}}>{c.dRk!==null?c.dRk>0?`↑${c.dRk}`:c.dRk<0?`↓${Math.abs(c.dRk)}`:"=":"-"}</td></tr>})}</tbody></table></div></div>
+    {comp&&mode==="periodo"&&<>
+      {/* Resumen comparativo */}
+      <div style={{...crd,background:`linear-gradient(135deg,${CL.priDk},${CL.pri})`,color:"#fff",padding:"16px 20px"}}>
+        <h3 style={{margin:"0 0 10px",fontSize:16,fontWeight:800}}>📊 {d2.periodo.desde} → {data.periodo.desde}</h3>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10}}>
+          {[{l:"Facturas",a:d2.tF,b:data.tF},{l:"Registros",a:d2.tR,b:data.tR},{l:"Cajeros",a:d2.cajeros.length,b:data.cajeros.length},{l:"Prom F/H",a:d2.avg,b:data.avg,dec:true},{l:"Dias",a:d2.dS.length,b:data.dS.length}].map(m=>{const d=m.dec?(m.b-m.a).toFixed(1):m.b-m.a;const up=d>0;return <div key={m.l} style={{background:"rgba(255,255,255,.12)",borderRadius:8,padding:"8px 10px",textAlign:"center"}}>
+            <div style={{fontSize:10,opacity:.7}}>{m.l}</div>
+            <div style={{fontSize:11}}>{m.dec?fN(m.a):m.a.toLocaleString()} → <b>{m.dec?fN(m.b):m.b.toLocaleString()}</b></div>
+            <div style={{fontSize:13,fontWeight:800,color:up?"#7dff7d":"#ff9999"}}>{up?"+":""}{m.dec?d:d.toLocaleString()}</div></div>})}</div></div>
+
+      {/* Tabla comparativa completa */}
+      <div style={crd}><h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700}}>📋 Comparativa por Cajero</h3>
+        <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["#","Cajero","Reg Ant","Reg Act","ΔReg","Dias Ant","Dias Act","F/H Ant","F/H Act","ΔF/H","Rank Ant","Rank Act","Mov"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead>
+          <tbody>{comp.map(c=>{const up=c.dFH>0,dn=c.dFH<0;return <tr key={c.nombre} style={{background:c.prev?up?"#f0faf4":dn?"#fef5f5":"#fffcf0":"#f8f8f8"}}>
+            <td style={{...TD,fontWeight:800}}>{c.rank}</td><td style={{...TD,fontWeight:600,fontSize:11}}>{c.nombre}{rBadge(c)}</td>
+            <td style={{...TD,fontSize:11}}>{c.prev?c.prev.tR.toLocaleString():"-"}</td><td style={TD}>{c.tR.toLocaleString()}</td>
+            <td style={{...TD,fontSize:11,fontWeight:600,color:c.dReg>0?"#2ecc71":c.dReg<0?"#e74c3c":"#666"}}>{c.dReg!==null?(c.dReg>0?"+":"")+c.dReg.toLocaleString():"-"}</td>
+            <td style={{...TD,fontSize:11}}>{c.prev?c.prev.numDias:"-"}</td><td style={TD}>{c.numDias}</td>
+            <td style={{...TD,fontSize:11}}>{c.prev?fN(c.prev.pfH):"-"}</td><td style={{...TD,fontWeight:700}}>{fN(c.pfH)}</td>
+            <td style={{...TD,fontWeight:800,color:up?"#2ecc71":dn?"#e74c3c":"#666",fontSize:13}}>{c.dFH!==null?`${up?"+":""}${fN(c.dFH)}`:"-"}</td>
+            <td style={{...TD,fontSize:11}}>{c.prev?`#${c.prev.rank}`:"-"}</td><td style={TD}>#{c.rank}</td>
+            <td style={{...TD,fontWeight:700,fontSize:14,color:c.dRk>0?"#2ecc71":c.dRk<0?"#e74c3c":"#666"}}>{c.dRk!==null?c.dRk>0?`↑${c.dRk}`:c.dRk<0?`↓${Math.abs(c.dRk)}`:"=":"-"}</td></tr>})}</tbody></table></div></div>
+
+      {/* Mejoraron / Bajaron */}
       <div className="desk-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
         <div style={{...crd,borderLeft:"4px solid #2ecc71"}}><h3 style={{margin:"0 0 8px",fontSize:14,fontWeight:700,color:"#2ecc71"}}>📈 Mas Mejoraron</h3>
-          {comp.filter(c=>c.dFH>0).slice(0,5).map(c=><div key={c.nombre} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:"1px solid #f0f2f1"}}><span style={{fontWeight:600}}>{sN(c.nombre)}{rBadge(c)}</span><span style={{fontWeight:800,color:"#2ecc71"}}>+{fN(c.dFH)}</span></div>)}
+          {comp.filter(c=>c.dFH>0).slice(0,5).map(c=><div key={c.nombre} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:"1px solid #f0f2f1"}}><span style={{fontWeight:600}}>{sN(c.nombre)}{rBadge(c)}</span><span style={{fontWeight:800,color:"#2ecc71"}}>+{fN(c.dFH)} f/h | +{(c.dReg||0).toLocaleString()} reg</span></div>)}
           {comp.filter(c=>c.dFH>0).length===0&&<p style={{fontSize:12,color:CL.txtL}}>Ninguno mejoro</p>}</div>
         <div style={{...crd,borderLeft:"4px solid #e74c3c"}}><h3 style={{margin:"0 0 8px",fontSize:14,fontWeight:700,color:"#e74c3c"}}>📉 Mas Bajaron</h3>
-          {comp.filter(c=>c.dFH!==null&&c.dFH<0).sort((a,b)=>a.dFH-b.dFH).slice(0,5).map(c=><div key={c.nombre} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:"1px solid #f0f2f1"}}><span style={{fontWeight:600}}>{sN(c.nombre)}{rBadge(c)}</span><span style={{fontWeight:800,color:"#e74c3c"}}>{fN(c.dFH)}</span></div>)}
+          {comp.filter(c=>c.dFH!==null&&c.dFH<0).sort((a,b)=>a.dFH-b.dFH).slice(0,5).map(c=><div key={c.nombre} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:"1px solid #f0f2f1"}}><span style={{fontWeight:600}}>{sN(c.nombre)}{rBadge(c)}</span><span style={{fontWeight:800,color:"#e74c3c"}}>{fN(c.dFH)} f/h | {(c.dReg||0).toLocaleString()} reg</span></div>)}
           {comp.filter(c=>c.dFH!==null&&c.dFH<0).length===0&&<p style={{fontSize:12,color:CL.txtL}}>Ninguno bajo</p>}</div></div>
-      {comp.filter(c=>!c.prev).length>0&&<div style={{...crd,borderLeft:"4px solid #f39c12"}}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700,color:CL.warn}}>🆕 Nuevos (no estaban en periodo anterior)</h3>
-        {comp.filter(c=>!c.prev).map(c=><span key={c.nombre} style={{display:"inline-block",padding:"3px 10px",margin:2,borderRadius:12,background:"#fff9e6",fontSize:11,fontWeight:600}}>{c.nombre} ({fN(c.pfH)} f/h)</span>)}</div>}</>}
+
+      {/* Nuevos y salieron */}
+      {comp.filter(c=>!c.prev).length>0&&<div style={{...crd,borderLeft:"4px solid #f39c12"}}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700,color:CL.warn}}>🆕 Nuevos (no estaban antes)</h3>
+        {comp.filter(c=>!c.prev).map(c=><span key={c.nombre} style={{display:"inline-block",padding:"3px 10px",margin:2,borderRadius:12,background:"#fff9e6",fontSize:11,fontWeight:600}}>{c.nombre} ({fN(c.pfH)} f/h)</span>)}</div>}
+      {d2.cajeros.filter(c2=>!data.cajeros.find(c=>c.nombre===c2.nombre)).length>0&&<div style={{...crd,borderLeft:"4px solid #95a5a6"}}><h3 style={{margin:"0 0 8px",fontSize:13,fontWeight:700,color:"#95a5a6"}}>👋 Salieron (estaban antes, ya no)</h3>
+        {d2.cajeros.filter(c2=>!data.cajeros.find(c=>c.nombre===c2.nombre)).map(c2=><span key={c2.nombre} style={{display:"inline-block",padding:"3px 10px",margin:2,borderRadius:12,background:"#f0f0f0",fontSize:11,fontWeight:600}}>{c2.nombre} ({fN(c2.pfH)} f/h)</span>)}</div>}
+    </>}
 
     {/* SEDE COMPARISON */}
     {d2&&mode==="sede"&&<SedeComp data={data} d2={d2}/>}
